@@ -7,6 +7,8 @@ import time
 database.init_database()
 
 cap = cv2.VideoCapture(0)
+cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
 last_scanned = None
 
 # Các biến quản lý trạng thái thông báo
@@ -19,12 +21,13 @@ while True:
     if not ret:
         print("Không thể kết nối với camera.")
         break
-        
     frame = cv2.flip(frame, 1)
     current_time = time.time()
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (3, 3), 0) # Sử dụng ma trận lọc 3x3 để làm mịn nhẹ
     
     # Đọc QR code từ camera
-    barcodes = pyzbar.decode(frame)
+    barcodes = pyzbar.decode(blurred)
     
     for barcode in barcodes:
         raw = barcode.data.decode("utf-8")

@@ -1,91 +1,81 @@
 import sqlite3
 import numpy as np
-from datetime import datetime 
+import cv2
 
 DB_PATH = "System.db"
 
 def init_database():
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    
-    # 1. Bảng thông tin người dùng 
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS persons(
-            id TEXT PRIMARY KEY, 
-            name TEXT NOT NULL, 
-            created_at TEXT DEFAULT (datetime('now', 'localtime'))
-        )
-    """)
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("PRAGMA foreign_keys = ON")
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS persons(
+                id         TEXT PRIMARY KEY,
+                name       TEXT NOT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS face_images(
+                person_id  TEXT PRIMARY KEY,
+                face_data  BLOB NOT NULL,
+                face_data_left BLOB NOT NULL, 
+                face_data_right BLOB NOT NULL,
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE
+            );
+        """)
 
-    # 2. Bảng thông tin khuôn mặt (Đã đổi tên cột img_id thành face_embedding cho rõ nghĩa)
-    cur.execute("""
-        CREATE TABLE IF NOT EXISTS person_id(
-            person_id TEXT PRIMARY KEY, 
-            face_embedding BLOB NOT NULL, 
-            update_at TEXT DEFAULT (datetime('now', 'localtime')),
-            created_at TEXT DEFAULT (datetime('now', 'localtime')),
-            FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE
-        )
-    """)
-    conn.commit()
-    conn.close()
-
-# Thêm người dùng mới
-def add_person(id, name):  # Đã bỏ dấu phẩy thừa ở (id, name,)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+def add_person(person_id: str, name: str) -> bool:
     try:
-        cur.execute("""
-            INSERT OR IGNORE INTO persons(id, name)
-            VALUES(?, ?)
-        """, (id, name))
-        conn.commit()
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO persons(id, name) VALUES(?, ?)",
+                (person_id, name)
+            )
+        return True
     except sqlite3.Error as e:
-        print(f"Lỗi khi thêm người dùng: {e}")
-    finally:
-        conn.close()
+        print(f"Lỗi add_person: {e}")
+        return False
 
-# Tìm kiếm thông tin người dùng
-def get_person(id):  # Đã bỏ dấu phẩy thừa ở (id,)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
+def get_person(person_id: str):
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(
+            "SELECT * FROM persons WHERE id = ?", (person_id,)
+        ).fetchone()
 
-    cur.execute("SELECT * FROM persons WHERE id = ?", (id,))
-    row = cur.fetchone()
-    
-    # Khi SELECT dữ liệu thì KHÔNG cần conn.commit()
-    conn.close()
-    return row
+def person_exists(person_id: str) -> bool:
+    return get_person(person_id) is not None
 
-# Kiểm tra người dùng tồn tại chưa
-def person_exists(id):
-    return get_person(id) is not None
+def save_face(person_id: str, face_bgr: np.ndarray, face_bgr_left: np.ndarray, face_bgr_right: np.ndarray) -> bool:
+    """Nhận ảnh BGR numpy array, nén JPEG rồi lưu vào DB."""
+    success, buffer = cv2.imencode('.jpg', face_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not success:
+        print("Lỗi: không encode được ảnh.")
+        return False
+    success_left, buffer_left = cv2.imencode('.jpg', face_bgr_left, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not success_left:
+        print("Lỗi: không encode được ảnh trái.")
+        return False
+    success_right, buffer_right = cv2.imencode('.jpg', face_bgr_right, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not success_right:
+        print("Lỗi: không encode được ảnh phải.")
+        return False
+    try:
+        with sqlite3.connect(DB_PATH) as conn:
+            conn.execute("""
+                INSERT OR REPLACE INTO face_images(person_id, face_data, face_data_left, face_data_right)
+                VALUES(?, ?, ?, ?, datetime('now', 'localtime'))
+            """)
+        return True
+    except sqlite3.Error as e:
+        print(f"Lỗi save_face: {e}")
+        return False
 
-# Lưu hoặc cập nhật khuôn mặt (Dưới dạng Vector Embedding)
-def save_face(person_id, embedding_array):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    
-    # Chuyển mảng NumPy sang dạng Bytes để lưu vào kiểu BLOB
-    embedding_bytes = embedding_array
-    
-    cur.execute("""
-        INSERT OR REPLACE INTO person_id(person_id, face_embedding)
-        VALUES(?, ?)
-    """, (person_id, embedding_bytes))
-    conn.commit()
-    conn.close()
-
-# Hàm bổ sung: Lấy khuôn mặt ra và chuyển ngược lại thành mảng NumPy khi cần nhận diện
-def get_face(person_id, dtype=np.float32):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    
-    cur.execute("SELECT face_embedding FROM person_id WHERE person_id = ?", (person_id,))
-    row = cur.fetchone()
-    conn.close()
-    
+def get_face(person_id: str) -> np.ndarray | None:
+    """Trả về ảnh BGR numpy array hoặc None."""
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT face_data FROM face_images WHERE person_id = ?", (person_id,)
+        ).fetchone()
     if row:
-        # Chuyển từ định dạng Bytes ngược về mảng NumPy
-        return np.frombuffer(row[0], dtype=dtype)
+        arr = np.frombuffer(row[0], dtype=np.uint8)
+        return cv2.imdecode(arr, cv2.IMREAD_COLOR)
     return None
