@@ -44,8 +44,9 @@ def get_person(person_id: str):
 def person_exists(person_id: str) -> bool:
     return get_person(person_id) is not None
 
-def save_face(person_id: str, face_bgr: np.ndarray, face_bgr_left: np.ndarray, face_bgr_right: np.ndarray) -> bool:
+def save_face(person_id: str, face_bgr: np.ndarray, face_bgr_left: np.ndarray, face_bgr_right: np.ndarray ) -> bool:
     """Nhận ảnh BGR numpy array, nén JPEG rồi lưu vào DB."""
+    
     success, buffer = cv2.imencode('.jpg', face_bgr, [cv2.IMWRITE_JPEG_QUALITY, 95])
     if not success:
         print("Lỗi: không encode được ảnh.")
@@ -62,8 +63,8 @@ def save_face(person_id: str, face_bgr: np.ndarray, face_bgr_left: np.ndarray, f
         with sqlite3.connect(DB_PATH) as conn:
             conn.execute("""
                 INSERT OR REPLACE INTO face_images(person_id, face_data, face_data_left, face_data_right)
-                VALUES(?, ?, ?, ?, datetime('now', 'localtime'))
-            """)
+                VALUES(?, ?, ?, ?)
+            """, (person_id, buffer.tobytes(), buffer_left.tobytes(), buffer_right.tobytes()))
         return True
     except sqlite3.Error as e:
         print(f"Lỗi save_face: {e}")

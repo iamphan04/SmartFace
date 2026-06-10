@@ -14,6 +14,11 @@ MODEL_URL = (
     "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
 )
 
+FACE_PERSONS = [
+    ("nhin vao camera", "front"), 
+    ("nhin sang trai", "left"), 
+    ("nhin sang phai", "right")
+]
 star_time = time.time() 
 def download_model():
     if not os.path.exists(MODEL_PATH):
@@ -61,13 +66,9 @@ def m_eye(lms, h, w)->bool:
         return True
     return False
 
-time_talk = None
+
 def save_true(face_crop, h, w, person_id):
-    database.save_face(person_id, face_crop)
-    print(f"Đã lưu khuôn mặt cho ID: {person_id}")
-                # Hiển thị ảnh vừa chụp + thông báo
     confirm = np.zeros((h, w, 3), dtype=np.uint8)
-                # Hiển thị ảnh khuôn mặt vừa lưu ở giữa màn hình
     fh, fw = face_crop.shape[:2]
     scale = min(300/fh, 300/fw)
     face_resized = cv2.resize(face_crop, (int(fw*scale), int(fh*scale)))
@@ -75,28 +76,19 @@ def save_true(face_crop, h, w, person_id):
     y_offset = h//2 - fh2//2 - 30
     x_offset = w//2 - fw2//2
     confirm[y_offset:y_offset+fh2, x_offset:x_offset+fw2] = face_resized
-                
-                # Khung viền xanh quanh ảnh
     cv2.rectangle(confirm, (x_offset-2, y_offset-2),
-                    (x_offset+fw2+2, y_offset+fh2+2), (0, 255, 0), 2)
-                
-                # Chữ thông báo
+                  (x_offset+fw2+2, y_offset+fh2+2), (0, 255, 0), 2)
     cv2.putText(confirm, "LUU THANH CONG!", (w//2 - 130, y_offset + fh2 + 50),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
     cv2.putText(confirm, f"ID: {person_id}", (w//2 - 100, y_offset + fh2 + 90),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
     cv2.putText(confirm, "Cua so se tu dong dong sau 3 giay...", (w//2 - 210, y_offset + fh2 + 125),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-                
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
     cv2.imshow("chup khuon mat", confirm)
-    cv2.waitKey(1)
-    time.sleep(10)
-    return 
+    cv2.waitKey(3000)  
 
 def main():
     database.init_database()
-    global star_talk
-
     person_id = input("Nhập mã người dùng: ").strip()
     if not database.person_exists(person_id):
         print("Không tìm thấy! Hãy chạy qr_scan.py trước.")
@@ -110,12 +102,18 @@ def main():
         print("Không mở được camera!")
         return
 
-    print("SPACE = chụp | Q = thoát")
+    print("Q = thoát")
+    captured = {}
+    step_idx = 0
     face_crop = None
-    face_right = None
-    face_left = None
-    lms =None
+    time_talk = None
+    lms = None
+    eye_drown = False
+    show = False
     while True:
+        if show :
+            cv2.waitKey(1)
+            continue
         ret, frame = cap.read()
         if not ret:
             break
@@ -132,6 +130,7 @@ def main():
             lms = result.face_landmarks[0]
             x1, y1, x2, y2 = get_face_bbox(lms, w, h)
             face_crop = frame[y1:y2, x1:x2].copy()
+            
 
             # Vẽ landmarks
             for lm in lms:
@@ -139,6 +138,7 @@ def main():
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
         # HUD
+        step_text, step_key =  FACE_PERSONS[step_idx]
         cv2.rectangle(frame, (0, 0), (w, 70), (0, 0, 0), -1)
         cv2.putText(frame, f"ID: {person_id}", (10, 25),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
@@ -149,21 +149,39 @@ def main():
         cv2.imshow("chup khuon mat", frame)
         key = cv2.waitKey(1) & 0xFF
 
-        if lms is not None and m_eye(lms, h, w): 
+        if m_eye(lms, h, w):
+            eye_drown = True
+
+        if lms is not None and eye_drown: 
             if time_talk is None:
                 time_talk= time.time()
              # SPACE
 
             star_talk = time.time()- time_talk
-            if star_talk >=3:
-                if face_crop is  not None:
-                    save_true(face_crop, h, w, person_id)
-                    break
-        else :
-            time_talk = None
+            bar_w = min(int(star_talk/3.0)*(w-20), w-20)
+            cv2.rectangle(frame, (10, h-25), (10 + bar_w, h-8), (0, 255, 0), -1)
+            cv2.putText(frame, "nham mat de chup ....", 
+                        (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
             
 
+        if star_talk >=3 and face_crop is not None:
+            captured[step_key]=face_crop.copy()
+            show= True
+            save_true(face_crop, h, w, person_id)
+            show = False
+            step_idx +=1
+            time_talk= None
+        if step_idx == 3:
+            database.save_face(person_id, 
+                                captured["front"], 
+                                captured["left"], 
+                                captured["right"])
+            break
+                
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
+            
     cap.release()
     cv2.destroyAllWindows()
 
