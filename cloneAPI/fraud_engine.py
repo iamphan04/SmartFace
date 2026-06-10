@@ -1,3 +1,9 @@
+import numpy as np
+from numpy.linalg import norm
+
+def cosine_similarity(v1, v2):
+    return np.dot(v1, v2) / (norm(v1) * norm(v2) + 1e-8)
+
 def calculate_trust_score(data):
     risk = 0
     face_score = data.get('face_match', {}).get('data', {}).get('match_score', 0)
