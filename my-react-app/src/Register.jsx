@@ -80,10 +80,8 @@ const Register = () => {
       registeredAt: new Date().toLocaleDateString('vi-VN')
     };
     
-    // Save as primary active user
     localStorage.setItem('smartface_db_user', JSON.stringify(userData));
     
-    // Also append to users list
     const existingUsersStr = localStorage.getItem('smartface_db_users');
     let usersList = [];
     if (existingUsersStr) {
@@ -94,12 +92,10 @@ const Register = () => {
         usersList = [];
       }
     }
-    // Filter out duplicates with same MSSV
     usersList = usersList.filter((u) => u.studentId !== userData.studentId);
     usersList.push(userData);
     localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
 
-    // Sync to Cloud Firestore database
     try {
       await setDoc(doc(db, 'users', userData.studentId), userData);
       console.log("Successfully registered to cloud database: users/" + userData.studentId);

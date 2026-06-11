@@ -4,7 +4,7 @@ import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import firebaseConfig from '../database-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
-export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); /* CRITICAL: The app will break without this line */
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId); 
 export const auth = getAuth();
 
 export const OperationType = {
@@ -37,7 +37,6 @@ export function handleFirestoreError(error, operationType, path) {
   throw new Error(JSON.stringify(errInfo));
 }
 
-// Validation function as requested in Skill: Validate Connection to Firestore
 async function testConnection() {
   try {
     await getDocFromServer(doc(db, 'test', 'connection'));

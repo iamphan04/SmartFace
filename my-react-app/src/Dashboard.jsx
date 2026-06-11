@@ -18,8 +18,8 @@ const Dashboard = () => {
   const [logs, setLogs] = useState([]);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
+  const [showAuthWarning, setShowAuthWarning] = useState(false);
 
-  // Play audio synthesizer beeps
   const playBeep = (freq, type, duration) => {
     try {
       const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -42,58 +42,10 @@ const Dashboard = () => {
     }
   };
 
-  // Load registered users from multi-user array, synchronized with Firestore
-  useEffect(() => {
+ useEffect(() => {
     const fetchUsers = async () => {
-      const listStr = localStorage.getItem('smartface_db_users');
       let usersList = [];
-      if (listStr) {
-        try {
-          const parsed = JSON.parse(listStr);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            usersList = parsed;
-          }
-        } catch (e) {
-          console.warn("Could not parse smartface_db_users", e);
-        }
-      }
 
-      // Fallback if smartface_db_users is empty but smartface_db_user has data
-      if (usersList.length === 0) {
-        const singleStr = localStorage.getItem('smartface_db_user');
-        if (singleStr) {
-          try {
-            const parsed = JSON.parse(singleStr);
-            usersList = [parsed];
-            localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
-          } catch (e) {}
-        }
-      }
-
-      // Ultimate fallback to simulated sample data so they always have at least 1-2 students to match
-      if (usersList.length === 0) {
-        const sample1 = {
-          fullName: 'Nguyễn Đức Anh',
-          studentId: 'B22DCCN068',
-          dob: '2004-10-15',
-          faculty: 'Khoa Công nghệ thông tin',
-          email: 'ducanh.n@student.edu.vn',
-          registeredAt: new Date().toLocaleDateString('vi-VN')
-        };
-        const sample2 = {
-          fullName: 'Trần Thị Mai',
-          studentId: 'B22DCCN102',
-          dob: '2004-03-22',
-          faculty: 'Khoa An toàn thông tin',
-          email: 'maitt.b22@student.edu.vn',
-          registeredAt: new Date().toLocaleDateString('vi-VN')
-        };
-        usersList = [sample1, sample2];
-        localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
-        localStorage.setItem('smartface_db_user', JSON.stringify(sample1));
-      }
-
-      // Sync with cloud database
       try {
         const snap = await getDocs(collection(db, 'users'));
         const fbUsers = [];
@@ -102,51 +54,36 @@ const Dashboard = () => {
         });
 
         if (fbUsers.length > 0) {
-          const merged = [...fbUsers];
-          usersList.forEach((localU) => {
-            if (!merged.some(u => u.studentId === localU.studentId)) {
-              merged.push(localU);
-            }
-          });
-          usersList = merged;
+          usersList = fbUsers;
           localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
+        } else {
+          localStorage.removeItem('smartface_db_users');
+          localStorage.removeItem('smartface_db_user');
         }
       } catch (error) {
         console.error("Dashboard Firestore Load Error:", error);
-        try {
-          handleFirestoreError(error, OperationType.LIST, 'users');
-        } catch (e) {}
+        
+        const listStr = localStorage.getItem('smartface_db_users');
+        if (listStr) {
+          try {
+            usersList = JSON.parse(listStr);
+          } catch (e) {}
+        }
       }
 
       setUsers(usersList);
       
-      // Default selected user is either the one in smartface_db_user or first in array
-      const activeSingleStr = localStorage.getItem('smartface_db_user');
-      if (activeSingleStr) {
-        try {
-          const activeObj = JSON.parse(activeSingleStr);
-          const foundIndex = usersList.findIndex(u => u.studentId === activeObj.studentId);
-          if (foundIndex >= 0) {
-            setIndex(foundIndex);
-            setUser(usersList[foundIndex]);
-          } else {
-            setIndex(0);
-            setUser(usersList[0]);
-          }
-        } catch (e) {
-          setIndex(0);
-          setUser(usersList[0]);
-        }
-      } else {
+      if (usersList.length > 0) {
         setIndex(0);
         setUser(usersList[0]);
+      } else {
+        setUser(null);
       }
     };
 
     fetchUsers();
   }, []);
 
-  // Cleanup stream on unmount
   useEffect(() => {
     return () => {
       if (streamRef.current) {
@@ -154,8 +91,23 @@ const Dashboard = () => {
       }
     };
   }, []);
-
+const clearAllLocalData = () => {
+  localStorage.removeItem('smartface_db_users');
+  localStorage.removeItem('smartface_db_user');
+  
+  setUsers([]);
+  setUser(null);
+  setIndex(0);
+  setOk(false);
+  
+  alert("Đã xóa toàn bộ dữ liệu tạm thành công!");
+};
   const startVerification = async () => {
+    if (!user) {
+      setShowAuthWarning(true);
+      playBeep(330, 'sine', 0.25);
+      return;
+    }
     if (active) return;
     setActive(true);
     setPct(0);
@@ -168,7 +120,6 @@ const Dashboard = () => {
     setMsg(mode === 'face' ? 'Đang khởi động kết nối camera...' : 'Đang căn chỉnh camera quét giấy tờ...');
     playBeep(440, 'sine', 0.1);
 
-    // Attempt to access true user camera
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
       streamRef.current = stream;
@@ -185,7 +136,6 @@ const Dashboard = () => {
       currentProgress += 2;
       setPct(currentProgress);
 
-      // Procedural telemetry click beeps
       if (currentProgress % 10 === 0 && currentProgress < 100) {
         playBeep(700 + currentProgress, 'sine', 0.04);
       }
@@ -196,10 +146,9 @@ const Dashboard = () => {
         } else if (currentProgress === 46) {
           setMsg('Đang trích xuất đặc trưng sinh trắc học...');
         } else if (currentProgress === 76) {
-          setMsg(user ? `Đang đối chiếu với hồ sơ MSSV: ${user.studentId}...` : 'Đang tìm kiếm dữ liệu lưu trữ khách...');
+          setMsg(`Đang đối chiếu với hồ sơ MSSV: ${user?.studentId || 'B22DCCN068'}...`);
         }
       } else {
-        // Document OCR logs
         if (currentProgress === 10) {
           setLogs(prev => [...prev, `[INFO] Đang dò tìm vật thể và đóng khung biên cạnh Thẻ sinh viên...`]);
           setMsg('Đang tìm biên cạnh tài liệu...');
@@ -209,19 +158,19 @@ const Dashboard = () => {
           setLogs(prev => [...prev, `[SUCCESS] Đã bóc tách trường văn bản bằng mạng thần kinh nhân tạo OCR...`]);
           setMsg('Đang giải mã thông tin văn bản...');
         } else if (currentProgress === 72) {
-          setLogs(prev => [...prev, `[MATCH] Trùng khớp mã định danh sinh viên: ${user ? user.studentId : 'GUEST_ID'} trong Cơ sở dữ liệu`]);
+          setLogs(prev => [...prev, `[MATCH] Trùng khớp mã định danh sinh viên: ${user?.studentId || 'B22DCCN068'} trong Cơ sở dữ liệu`]);
         } else if (currentProgress === 88) {
           setLogs(prev => [...prev, `[FACE MATCH] Đối tương quan ảnh chân dung Thẻ sinh viên với Gương mặt Live: 98.7% TRÙNG KHỚP`]);
           setMsg('Đang kiểm tra sinh trắc chân dung...');
         }
       }
-
+ 
       if (currentProgress >= 100) {
         clearInterval(interval);
         setOk(true);
         
         if (mode === 'face') {
-          setMsg(user ? `Xác thực thành công! Xin chào ${user.fullName}` : 'Xác thực thành công với tài khoản Khách!');
+          setMsg(`Xác thực thành công! Xin chào ${user?.fullName || 'Sinh viên'}`);
         } else {
           setLogs(prev => [...prev, `[XÁC MINH HOÀN TẤT] HỒ SƠ ĐÃ ĐƯỢC THÔNG QUA AN TOÀN TOÀN DIỆN ●`]);
           setMsg(`Đã đối soát giấy tờ hoàn tất!`);
@@ -229,11 +178,9 @@ const Dashboard = () => {
         
         setActive(false);
         
-        // Match chime double beep
         setTimeout(() => playBeep(987.77, 'sine', 0.1), 0);
         setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
 
-        // Turn off camera upon completion
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
           streamRef.current = null;
@@ -479,22 +426,13 @@ const Dashboard = () => {
                   <h4 style={{ textTransform: 'uppercase', color: '#22d3ee', fontSize: '13px', fontWeight: 'bold', marginBottom: '14px', borderBottom: '1px solid rgba(255,255,255,0.08)', paddingBottom: '8px' }}>
                     KẾT QUẢ ĐỐI CHIẾU THÀNH CÔNG
                   </h4>
-                  {user ? (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', textAlign: 'left' }}>
-                      <p style={{ margin: '2px 0' }}><strong>Họ và Tên:</strong> {user.fullName}</p>
-                      <p style={{ margin: '2px 0' }}><strong>MSSV:</strong> {user.studentId}</p>
-                      <p style={{ margin: '2px 0' }}><strong>Khoa:</strong> {user.faculty || "Công nghệ thông tin"}</p>
-                      <p style={{ margin: '2px 0' }}><strong>Ngày sinh:</strong> {user.dob.split('-').reverse().join('/')}</p>
-                      <p style={{ margin: '2px 0' }}><strong>Chỉ số tin cậy:</strong> <span style={{ color: '#00ff7f', fontWeight: 'bold' }}>98.4% (SIÊU KHỚP)</span></p>
-                    </div>
-                  ) : (
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', textAlign: 'left' }}>
-                      <p style={{ margin: '2px 0' }}><strong>Họ và Tên:</strong> KHÁCH THỦ NGHIỆM</p>
-                      <p style={{ margin: '2px 0' }}><strong>MSSV:</strong> GUEST_MODE_ACTIVE</p>
-                      <p style={{ margin: '2px 0' }}><strong>Trạng thái:</strong> Thành công (Chế độ mô phỏng tự do)</p>
-                      <p style={{ margin: '2px 0' }}><strong>Chỉ số tin cậy:</strong> <span style={{ color: '#00ff7f', fontWeight: 'bold' }}>95.0% (MÔ PHỎNG KHỚP)</span></p>
-                    </div>
-                  )}
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', textAlign: 'left' }}>
+                    <p style={{ margin: '2px 0' }}><strong>Họ và Tên:</strong> {user?.fullName || 'Nguyễn Đức Anh'}</p>
+                    <p style={{ margin: '2px 0' }}><strong>MSSV:</strong> {user?.studentId || 'B22DCCN068'}</p>
+                    <p style={{ margin: '2px 0' }}><strong>Khoa:</strong> {user?.faculty || "Công nghệ thông tin"}</p>
+                    <p style={{ margin: '2px 0' }}><strong>Ngày sinh:</strong> {user?.dob ? user.dob.split('-').reverse().join('/') : '15/10/2004'}</p>
+                    <p style={{ margin: '2px 0' }}><strong>Chỉ số tin cậy:</strong> <span style={{ color: '#00ff7f', fontWeight: 'bold' }}>98.4% (SIÊU KHỚP)</span></p>
+                  </div>
 
                   <button
                     onClick={() => { setOk(false); setPct(0); }}
@@ -523,13 +461,14 @@ const Dashboard = () => {
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
                       <div style={{
                         width: '50px',
-                        height: '60px',
+                        height: '50px',
                         background: 'rgba(34, 211, 238, 0.1)',
                         border: '1px solid rgba(34, 211, 238, 0.2)',
                         borderRadius: '6px',
                         display: 'flex',
                         alignItems: 'center',
-                        justifyContent: 'center'
+                        justifyContent: 'center',
+                        flexShrink: 0
                       }}>
                         <svg width="24" height="24" fill="currentColor" viewBox="0 0 24 24" style={{ color: '#22d3ee' }}>
                           <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
@@ -537,7 +476,7 @@ const Dashboard = () => {
                       </div>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '3px', textAlign: 'left' }}>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>HỌ VÀ TÊN / FULL NAME</div>
-                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ffffff' }}>{user ? user.fullName : 'KHÁCH THỦ NGHIỆM'}</div>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ffffff' }}>{user?.fullName || 'Nguyễn Đức Anh'}</div>
                       </div>
                     </div>
                     
@@ -545,13 +484,13 @@ const Dashboard = () => {
                       <div>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>MSSV / STUDENT ID</div>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#e2e8f0', fontFamily: 'monospace' }}>
-                          {user ? user.studentId : 'GUEST_9999'}
+                          {user?.studentId || 'B22DCCN068'}
                         </div>
                       </div>
                       <div>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>NGÀY SINH / DATE OF BIRTH</div>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#e2e8f0' }}>
-                          {user ? user.dob.split('-').reverse().join('/') : '10/10/2004'}
+                          {user?.dob ? user.dob.split('-').reverse().join('/') : '15/10/2004'}
                         </div>
                       </div>
                     </div>
@@ -560,7 +499,7 @@ const Dashboard = () => {
                       <div>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>KHOA PHÒNG / REGION</div>
                         <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#cbd5e1' }}>
-                          {user ? (user.faculty || 'Công nghệ thông tin') : 'Khoa CNTT'}
+                          {user?.faculty || 'Khoa Công nghệ thông tin'}
                         </div>
                       </div>
                       <div>
@@ -596,10 +535,14 @@ const Dashboard = () => {
           </div>
 
           <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '12px', color: '#64748b', zIndex: 10 }}>
-            © {new Date().getFullYear()} SmartFace ID. Toàn bộ tính năng nhận diện sinh học nâng cao và dữ liệu đối quang đều bảo lưu bản quyền tác giả.
+              © {new Date().getFullYear()} SmartFace ID. Toàn bộ thông tin sinh học và đăng ký được bảo mật theo tiêu chuẩn sở hữu trí tuệ của nhà phát triển.
+
+
           </div>
         </div>
       </main>
+
+      
     </div>
   );
 };

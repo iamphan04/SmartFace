@@ -24,7 +24,7 @@ html, body {
   flex-direction: column;
 }
 
-/* Atmospheric Glowing elements */
+
 .landing-wrapper::before {
   content: '';
   position: absolute;
@@ -143,7 +143,7 @@ html, body {
   font-weight: 900;
 }
 
-/* Badge styled to match mock */
+
 .badge-nextgen {
   display: inline-block;
   padding: 6px 16px;
@@ -158,19 +158,16 @@ html, body {
   margin-bottom: 24px;
 }
 
-/* Hologram rotating buttons styling */
-.btn-dangnhap, .btn-action-glow {
 
+.btn-dangnhap, .btn-action-glow {
   position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
   text-align: center;
   width: 100%;
-  height: 80px;     /* Thay thế min-height bằng chiều cao cố định 80px */
+  min-height: 56px;
   background-color: #0f172a; 
-  /* ... các thuộc tính khác giữ nguyên ... */
-
   color: #ffffff;
   padding: 12px 24px;
   border-radius: 12px;
@@ -226,7 +223,7 @@ html, body {
   transform: scale(0.97);
 }
 
-/* Design HTML primary background buttons */
+
 .btn-primary-cyan {
   width: 100%;
   padding: 16px;
@@ -249,7 +246,7 @@ html, body {
   background-color: #22d3ee;
 }
 
-/* Secondary Button style */
+
 .btn-dangnhap-secondary {
   background: rgba(255, 255, 255, 0.03);
   color: #e2e8f0;
@@ -269,7 +266,7 @@ html, body {
   transform: translateY(-2px);
 }
 
-/* Profile details overlay matching design */
+
 .profile-card-overlay {
   background: rgba(15, 23, 42, 0.55);
   backdrop-filter: blur(20px);
@@ -483,7 +480,7 @@ html, body {
   .features-grid { grid-template-columns: 1fr; }
 }
 
-/* Immersive design Glass cards details */
+
 .auth-choice-box {
   background: rgba(255, 255, 255, 0.02);
   backdrop-filter: blur(24px);
@@ -509,12 +506,12 @@ html, body {
 
 @media (min-width: 640px) {
   .btn-actions-row {
-    grid-template-columns: repeat(3, 1fr); /* Sửa thành 3 cột đều nhau 100% */
-    align-items: stretch;                  /* Cho phép các nút tự dãn cao bằng nhau */
+    grid-template-columns: 1fr 1fr;
+    align-items: center;
   }
 }
 
-/* Fancy modal matching design */
+
 .modal-overlay {
   position: fixed;
   inset: 0;

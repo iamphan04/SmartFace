@@ -11,7 +11,6 @@ const Landing = () => {
   const [profile, setProfile] = useState(false);
   const [modal, setModal] = useState(false);
 
-  // Load registered users from multi-user array or fallback, synchronized with Firestore
   const loadUsersFromStorage = async () => {
     const listStr = localStorage.getItem('smartface_db_users');
     let usersList = [];
@@ -32,13 +31,11 @@ const Landing = () => {
       } catch (e) {}
     }
 
-    // Sync if only single savedUser exists but usersList is empty
     if (activeUser && usersList.length === 0) {
       usersList = [activeUser];
       localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
     }
 
-    // Dynamic Cloud Database synchronization
     try {
       const snap = await getDocs(collection(db, 'users'));
       const fbUsers = [];
@@ -47,7 +44,6 @@ const Landing = () => {
       });
       
       if (fbUsers.length > 0) {
-        // Merge lists prioritizing Firestore cloud entries
         const merged = [...fbUsers];
         usersList.forEach((localU) => {
           if (!merged.some(u => u.studentId === localU.studentId)) {
@@ -57,7 +53,6 @@ const Landing = () => {
         usersList = merged;
         localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
         
-        // Sync active user if unset
         if (!activeUser && fbUsers.length > 0) {
           activeUser = fbUsers[0];
           localStorage.setItem('smartface_db_user', JSON.stringify(activeUser));
@@ -112,7 +107,6 @@ const Landing = () => {
     const draw = () => {
       ctx.clearRect(0, 0, width, height);
 
-      // Cyber grid lines
       ctx.strokeStyle = 'rgba(6, 182, 212, 0.04)';
       ctx.lineWidth = 1;
       const step = 60;
@@ -129,7 +123,6 @@ const Landing = () => {
         ctx.stroke();
       }
 
-      // Nodes
       for (let i = 0; i < pCount; i++) {
         const p = pts[i];
         p.x += p.vx;
@@ -143,7 +136,6 @@ const Landing = () => {
         ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
         ctx.fill();
 
-        // Plus marks
         if (i % 6 === 0) {
           ctx.strokeStyle = `rgba(34, 211, 238, ${p.alpha * 0.35})`;
           ctx.lineWidth = 1;
@@ -155,7 +147,6 @@ const Landing = () => {
           ctx.stroke();
         }
 
-        // Connections
         for (let j = i + 1; j < pCount; j++) {
           const p2 = pts[j];
           const dist = Math.hypot(p.x - p2.x, p.y - p2.y);
@@ -202,12 +193,12 @@ const Landing = () => {
 
   const createSampleAccountAndNavigate = () => {
     const sampleUser = {
-      fullName: 'Nguyễn Đức Anh',
-      studentId: 'B22DCCN068',
-      dob: '2004-10-15',
-      faculty: 'Khoa Công nghệ thông tin',
-      email: 'ducanh.n@student.edu.vn',
-      frontCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><circle cx="50" cy="90" r="24" fill="%2338bdf8" opacity="0.2"/><circle cx="50" cy="90" r="16" fill="%233a82f6"/><text x="110" y="55" fill="%2338bdf8" font-size="14" font-weight="bold">THẺ SINH VIÊN</text><text x="110" y="80" fill="%23ffffff" font-size="12">Họ tên: Nguyễn Đức Anh</text><text x="110" y="100" fill="%23ffffff" font-size="12">MSSV: B22DCCN068</text><text x="110" y="120" fill="%23cbd5e1" font-size="10">Khoa: CNTT</text><text x="110" y="140" fill="%2322c55e" font-size="9" font-weight="bold">● SMARTFACE VERIFIED</text></svg>',
+      fullName: '',
+      studentId: '',
+      dob: '',
+      faculty: '',
+      email: '',
+      frontCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><circle cx="50" cy="90" r="24" fill="%2338bdf8" opacity="0.2"/><circle cx="50" cy="90" r="16" fill="%233a82f6"/><text x="110" y="55" fill="%2338bdf8" font-size="14" font-weight="bold">THẺ SINH VIÊN</text><text x="110" y="80" fill="%23ffffff" font-size="12">Họ tên:</text><text x="110" y="100" fill="%23ffffff" font-size="12">MSSV: </text><text x="110" y="120" fill="%23cbd5e1" font-size="10">Khoa: </text><text x="110" y="140" fill="%2322c55e" font-size="9" font-weight="bold">● SMARTFACE VERIFIED</text></svg>',
       backCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><text x="30" y="40" fill="%2394a3b8" font-size="9">CHỮ KÝ SINH VIÊN / STUDENT SIGNATURE</text><line x1="30" y1="70" x2="160" y2="70" stroke="%23ff3366" stroke-width="1.5" stroke-dasharray="2 2"/><text x="30" y="110" fill="%2394a3b8" font-size="9">ĐIỀU KIỆN SỬ DỤNG</text><text x="30" y="130" fill="%23cbd5e1" font-size="8">Thẻ này chỉ dùng trong khuôn viên nhà trường.</text><text x="30" y="145" fill="%23cbd5e1" font-size="8">Mất thẻ vui lòng báo cho phòng công tác SV.</text></svg>',
       registeredAt: new Date().toLocaleDateString('vi-VN')
     };
@@ -248,7 +239,7 @@ const Landing = () => {
     },
     {
       id: 4,
-      text: "Đồng bộ Cơ sở dữ liệu đám mây",
+      text: "Mang lại tính công bằng cao",
       icon: (
         <svg fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" d="M12 3v17.25m0-17.25a9 9 0 019 9M12 3a9 9 0 00-9 9m9 5.25a9 9 0 01-9-9m9 9a9 9 0 009-9M5.625 7.5h12.75M5.625 12h12.75m-12.75 4.5h12.75" />
@@ -295,7 +286,7 @@ const Landing = () => {
               XÁC THỰC THÔNG MINH <br/> <span className="gradient-title-accent">SMARTFACE</span>
             </h1>
             <p id="landing-subtitle" style={{ color: '#cbd5e1', fontSize: '18px', maxWidth: '700px', margin: '0 auto 30px auto', textShadow: '0 1px 3px rgba(0,0,0,0.8)' }}>
-              Công nghệ xác thực khuôn mặt, thẻ sinh viên một cách trực quan.
+              Công nghệ nhận diện khuôn mặt kết hợp đối sánh dữ liệu thẻ sinh viên trực quan.
             </p>
 
             <div id="auth-choice-box" className="auth-choice-box" style={{ maxWidth: '480px', margin: '0 auto', background: 'rgba(15, 23, 42, 0.75)', border: '1px solid rgba(6, 182, 212, 0.25)', padding: '20px', borderRadius: '16px' }}>
@@ -360,7 +351,7 @@ const Landing = () => {
               ) : (
                 <div id="unregistered-box" className="unregistered-box" style={{ width: '100%', textAlign: 'center' }}>
                   <p style={{ fontSize: '15px', color: '#cbd5e1', marginBottom: '20px' }}>
-                    Bạn chưa có tài khoản trong hệ thống? Vui lòng tiến hành đăng ký hoặc sử dụng tài khoản khách để đăng nhập.
+                    Bạn chưa có tài khoản trong hệ thống? Vui lòng tiến hành đăng ký!
                   </p>
                   <div className="btn-actions-row">
                     <button 
@@ -368,7 +359,7 @@ const Landing = () => {
                       className="btn-dangnhap" 
                       onClick={() => navigate('/register')}
                     >
-                      Đăng ký tài khoản mới
+                      Đăng ký 
                     </button>
                     
                     <button 
@@ -377,14 +368,6 @@ const Landing = () => {
                       onClick={handleRegisteredLoginClick}
                     >
                       Đăng nhập tài khoản đã đăng ký
-                    </button>
-
-                    <button 
-                      id="btn-navigate-guest"
-                      className="btn-dangnhap" 
-                      onClick={() => navigate('/Dashboard')}
-                    >
-                      Thử nghiệm Đăng nhập (Khách)
                     </button>
                   </div>
                 </div>
@@ -396,23 +379,111 @@ const Landing = () => {
       </main>
 
       {modal && (
-        <div id="no-account-modal" className="modal-overlay" onClick={() => setModal(false)}>
-          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-title">Hệ Thống SmartFace</div>
-            <p className="modal-desc">
-              Không tìm thấy hồ sơ liên kết nào lưu trữ trên thiết bị.
-            </p>
-            <div className="modal-btn-row">
-              <button id="btn-modal-install" className="btn-modal-primary" onClick={createSampleAccountAndNavigate}>
-                Tải tài khoản mẫu & Quét khuôn mặt
-              </button>
-              <button id="btn-modal-cancel" className="btn-modal-secondary" onClick={() => setModal(false)}>
-                Quay lại
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+  <div 
+    id="no-account-modal" 
+    className="modal-overlay" 
+    onClick={() => setModal(false)}
+    style={{
+      position: 'fixed',
+      top: 0,
+      left: 0,
+      right: 0,
+      bottom: 0,
+      background: 'rgba(5, 8, 16, 0.85)',
+      backdropFilter: 'blur(12px)',
+      zIndex: 10000,
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      padding: '24px'
+    }}
+  >
+    <div 
+      className="modal-content" 
+      onClick={(e) => e.stopPropagation()}
+      style={{
+        background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%)',
+        border: '1px solid rgba(239, 68, 68, 0.3)',
+        boxShadow: '0 0 30px rgba(239, 68, 68, 0.15)',
+        borderRadius: '24px',
+        padding: '32px',
+        maxWidth: '500px',
+        width: '100%',
+        textAlign: 'center',
+        animation: 'modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
+      }}
+    >
+            <div style={{
+        width: '64px',
+        height: '64px',
+        background: 'rgba(239, 68, 68, 0.1)',
+        borderRadius: '50%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        color: '#ef4444',
+        margin: '0 auto 20px auto',
+        border: '1px solid rgba(239, 68, 68, 0.2)'
+      }}>
+        <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+        </svg>
+      </div>
+
+      <h3 style={{ fontSize: '20px', fontWeight: '800', color: '#ffffff', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+        Yêu cầu đăng nhập tài khoản
+      </h3>
+      
+      <p style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.6', marginBottom: '24px' }}>
+        Hệ thống chưa ghi nhận bất kỳ dữ liệu định danh sinh viên nào từ phía bạn. Vui lòng tiến hành đăng ký tài khoản!
+      </p>
+
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+        <button
+          id="btn-modal-install"
+          onClick={() => {
+            setModal(false);
+            navigate('/register');
+          }}
+          style={{
+            background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
+            color: '#ffffff',
+            border: 'none',
+            padding: '12px 24px',
+            borderRadius: '12px',
+            fontSize: '14px',
+            fontWeight: '700',
+            cursor: 'pointer',
+            boxShadow: '0 4px 15px rgba(6, 182, 212, 0.25)',
+            transition: 'all 0.2s ease',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}
+        >
+          Đăng ký tài khoản mới
+        </button>
+        
+        <button
+          id="btn-modal-cancel"
+          onClick={() => setModal(false)}
+          style={{
+            background: 'rgba(255, 255, 255, 0.05)',
+            color: '#e2e8f0',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            padding: '12px 24px',
+            borderRadius: '12px',
+            fontSize: '13px',
+            fontWeight: '700',
+            cursor: 'pointer',
+            transition: 'all 0.2s'
+          }}
+        >
+          Về trang chủ đăng nhập mẫu
+        </button>
+      </div>
+    </div>
+  </div>
+)}
 
       <section id="features-section" className="features-section" style={{ zIndex: 10 }}>
         <div className="container features-grid">
@@ -431,10 +502,9 @@ const Landing = () => {
 
       <footer id="landing-footer" style={{ borderTop: '1px solid rgba(255,255,255,0.05)', padding: '30px 20px', textAlign: 'center', zIndex: 10, background: 'rgba(5, 5, 10, 0.4)', marginTop: '40px' }}>
         <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0, fontWeight: 500 }}>
-          © {new Date().getFullYear()} SmartFace ID. Toàn bộ bản quyền hệ thống thuộc sở hữu độc quyền của nhà phát triển ứng dụng PDT.
+            © {new Date().getFullYear()} SmartFace ID. Toàn bộ thông tin sinh học và đăng ký được bảo mật theo tiêu chuẩn sở hữu trí tuệ của nhà phát triển.
         </p>
         <p style={{ color: '#64748b', fontSize: '11px', marginTop: '6px', margin: 0 }}>
-          Bảo lưu mọi quyền sở hữu trí tuệ đối với mã nguồn, sơ đồ cơ sở dữ liệu và thuật toán quét sinh học. Nghiêm cấm mọi hành vi sao chép, đảo ngược mã nguồn hoặc phân phối trái phép dưới mọi hình thức.
         </p>
       </footer>
     </div>
