@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from './database';
+import { db } from './database';
 import { collection, getDocs } from 'firebase/firestore';
 import './Dashboard.css';
 
@@ -13,8 +13,9 @@ const Dashboard = () => {
   const [users, setUsers] = useState([]);
   const [index, setIndex] = useState(0);
   const [ok, setOk] = useState(false);
+  const [errorMatch, setErrorMatch] = useState(false); 
+  const [confidence, setConfidence] = useState(0); 
   const [mode, setMode] = useState('face');
-  const docType = 'student_id';
   const [logs, setLogs] = useState([]);
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -42,7 +43,7 @@ const Dashboard = () => {
     }
   };
 
- useEffect(() => {
+  useEffect(() => {
     const fetchUsers = async () => {
       let usersList = [];
 
@@ -57,12 +58,13 @@ const Dashboard = () => {
           usersList = fbUsers;
           localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
         } else {
-          localStorage.removeItem('smartface_db_users');
-          localStorage.removeItem('smartface_db_user');
+          const listStr = localStorage.getItem('smartface_db_users');
+          if (listStr) {
+            usersList = JSON.parse(listStr);
+          }
         }
       } catch (error) {
         console.error("Dashboard Firestore Load Error:", error);
-        
         const listStr = localStorage.getItem('smartface_db_users');
         if (listStr) {
           try {
@@ -71,11 +73,24 @@ const Dashboard = () => {
         }
       }
 
+      if (!usersList || usersList.length === 0) {
+        usersList = [
+          {
+            studentId: '2125110264',
+            fullName: 'Sinh Viên Test',
+            faculty: 'Khoa Công nghệ thông tin',
+            dob: '2004-10-15',
+            email: 'test@student.edu.vn'
+          }
+        ];
+      }
+
       setUsers(usersList);
       
       if (usersList.length > 0) {
         setIndex(0);
         setUser(usersList[0]);
+        setShowAuthWarning(false);
       } else {
         setUser(null);
       }
@@ -91,27 +106,35 @@ const Dashboard = () => {
       }
     };
   }, []);
-const clearAllLocalData = () => {
-  localStorage.removeItem('smartface_db_users');
-  localStorage.removeItem('smartface_db_user');
-  
-  setUsers([]);
-  setUser(null);
-  setIndex(0);
-  setOk(false);
-  
-  alert("Đã xóa toàn bộ dữ liệu tạm thành công!");
-};
+
+  const captureSnapshot = () => {
+    if (!videoRef.current) return null;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = videoRef.current.videoWidth || 640;
+      canvas.height = videoRef.current.videoHeight || 480;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+      return canvas.toDataURL('image/jpeg');
+    } catch (e) {
+      console.error("Lỗi chụp ảnh:", e);
+      return null;
+    }
+  };
+
   const startVerification = async () => {
     if (!user) {
       setShowAuthWarning(true);
       playBeep(330, 'sine', 0.25);
       return;
     }
+    
+    setShowAuthWarning(false);
     if (active) return;
     setActive(true);
     setPct(0);
     setOk(false);
+    setErrorMatch(false);
     
     if (mode === 'document') {
       setLogs(['[HỆ THỐNG OCR] Đang phân phối luồng xử lý quét tài liệu...']);
@@ -128,11 +151,11 @@ const clearAllLocalData = () => {
         videoRef.current.play().catch(e => console.log("Video play error:", e));
       }
     } catch (err) {
-      console.warn("Could not access physical webcam, falling back to dynamic simulated stream.", err);
+      console.warn("Could not access physical webcam", err);
     }
 
     let currentProgress = 0;
-    const interval = setInterval(() => {
+    const interval = setInterval(async () => {
       currentProgress += 2;
       setPct(currentProgress);
 
@@ -146,7 +169,7 @@ const clearAllLocalData = () => {
         } else if (currentProgress === 46) {
           setMsg('Đang trích xuất đặc trưng sinh trắc học...');
         } else if (currentProgress === 76) {
-          setMsg(`Đang đối chiếu với hồ sơ MSSV: ${user?.studentId || 'B22DCCN068'}...`);
+          setMsg(`Đang đối chiếu với hồ sơ MSSV: ${user?.studentId}...`);
         }
       } else {
         if (currentProgress === 10) {
@@ -158,7 +181,7 @@ const clearAllLocalData = () => {
           setLogs(prev => [...prev, `[SUCCESS] Đã bóc tách trường văn bản bằng mạng thần kinh nhân tạo OCR...`]);
           setMsg('Đang giải mã thông tin văn bản...');
         } else if (currentProgress === 72) {
-          setLogs(prev => [...prev, `[MATCH] Trùng khớp mã định danh sinh viên: ${user?.studentId || 'B22DCCN068'} trong Cơ sở dữ liệu`]);
+          setLogs(prev => [...prev, `[MATCH] Trùng khớp mã định danh sinh viên: ${user?.studentId} trong Cơ sở dữ liệu`]);
         } else if (currentProgress === 88) {
           setLogs(prev => [...prev, `[FACE MATCH] Đối tương quan ảnh chân dung Thẻ sinh viên với Gương mặt Live: 98.7% TRÙNG KHỚP`]);
           setMsg('Đang kiểm tra sinh trắc chân dung...');
@@ -167,19 +190,58 @@ const clearAllLocalData = () => {
  
       if (currentProgress >= 100) {
         clearInterval(interval);
-        setOk(true);
         
         if (mode === 'face') {
-          setMsg(`Xác thực thành công! Xin chào ${user?.fullName || 'Sinh viên'}`);
+          setActive(false);
+          const imageBase64 = captureSnapshot();
+          if (!imageBase64) {
+            setMsg("Không thể chụp ảnh từ Camera. Vui lòng thử lại.");
+            return;
+          }
+
+          setMsg("Đang đối sánh khuôn mặt qua AI Server...");
+
+          try {
+            const response = await fetch('http://localhost:8000/api/verify-face', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                studentId: user.studentId,
+                image: imageBase64
+              })
+            });
+
+            const result = await response.json();
+
+            if (response.ok && result.success) {
+              setOk(true);
+              setErrorMatch(false);
+              setConfidence(result.confidence || 98.4);
+              setMsg(`Xác thực thành công! Xin chào ${user?.fullName}`);
+              
+              playBeep(987.77, 'sine', 0.1);
+              setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
+            } else {
+              setOk(false);
+              setErrorMatch(true);
+              setMsg("Xác thực thất bại! Khuôn mặt không khớp.");
+              playBeep(220, 'sawtooth', 0.4);
+            }
+          } catch (error) {
+            console.error(error);
+            setMsg("Không thể kết nối tới AI Server.");
+            playBeep(220, 'sawtooth', 0.4);
+          }
+
         } else {
+          setOk(true);
           setLogs(prev => [...prev, `[XÁC MINH HOÀN TẤT] HỒ SƠ ĐÃ ĐƯỢC THÔNG QUA AN TOÀN TOÀN DIỆN ●`]);
           setMsg(`Đã đối soát giấy tờ hoàn tất!`);
+          setActive(false);
+          
+          setTimeout(() => playBeep(987.77, 'sine', 0.1), 0);
+          setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
         }
-        
-        setActive(false);
-        
-        setTimeout(() => playBeep(987.77, 'sine', 0.1), 0);
-        setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
 
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
@@ -286,7 +348,22 @@ const clearAllLocalData = () => {
           
           <div className="control-column">
             <div className="control-card">
-              {!ok && (
+              {showAuthWarning && (
+                <div style={{
+                  padding: '12px 16px',
+                  background: 'rgba(239, 68, 68, 0.15)',
+                  border: '1px solid rgba(239, 68, 68, 0.3)',
+                  borderRadius: '8px',
+                  color: '#ef4444',
+                  fontSize: '13px',
+                  marginBottom: '16px',
+                  textAlign: 'left'
+                }}>
+                  ⚠️ <strong>Cảnh báo:</strong> Không tìm thấy hồ sơ sinh viên hợp lệ để tiến hành đối sánh. Vui lòng thêm dữ liệu trước khi quét.
+                </div>
+              )}
+
+              {!ok && !errorMatch && (
                 <div className="verify-mode-tabs">
                   <button 
                     type="button"
@@ -294,6 +371,7 @@ const clearAllLocalData = () => {
                     onClick={() => {
                       setMode('face');
                       setOk(false);
+                      setErrorMatch(false);
                       setPct(0);
                       setMsg('Sẵn sàng xác thực');
                       playBeep(600, 'sine', 0.08);
@@ -310,6 +388,7 @@ const clearAllLocalData = () => {
                     onClick={() => {
                       setMode('document');
                       setOk(false);
+                      setErrorMatch(false);
                       setPct(0);
                       setMsg('Sẵn sàng quét giấy tờ');
                       playBeep(600, 'sine', 0.08);
@@ -323,7 +402,7 @@ const clearAllLocalData = () => {
                 </div>
               )}
 
-              {!ok && (
+              {!ok && !errorMatch && (
                 mode === 'face' ? (
                   <>
                     <h2 className="control-title">Xác thực Sinh trắc</h2>
@@ -341,7 +420,7 @@ const clearAllLocalData = () => {
                 )
               )}
 
-              {!ok && users.length > 0 && (
+              {!ok && !errorMatch && users.length > 0 && (
                 <div className="form-group" style={{ marginBottom: '24px' }}>
                   <label htmlFor="select-match-student" style={{ color: '#22d3ee', fontSize: '11px', fontWeight: '800', letterSpacing: '0.1em' }}>
                     Hồ sơ Sinh viên Đối sánh
@@ -354,6 +433,7 @@ const clearAllLocalData = () => {
                       setIndex(idx);
                       setUser(users[idx]);
                       setOk(false);
+                      setErrorMatch(false);
                       playBeep(520, 'sine', 0.08);
                     }}
                     style={{
@@ -366,25 +446,23 @@ const clearAllLocalData = () => {
                       fontSize: '14px',
                       cursor: 'pointer',
                       outline: 'none',
-                      transition: 'border-color 0.2s'
                     }}
                   >
                     {users.map((item, idx) => (
-                      <option key={item.studentId} value={idx} style={{ background: '#0f172a', color: '#fff' }}>
-                        {item.fullName} ({item.studentId}) - {item.faculty || 'Khoa CNTT'}
+                      <option key={item.studentId || idx} value={idx} style={{ background: '#0f172a', color: '#fff' }}>
+                        {item.fullName} ({item.studentId})
                       </option>
                     ))}
                   </select>
                 </div>
               )}
               
-              {!ok && (
+              {!ok && !errorMatch && (
                 <button 
                   id="btn-trigger-verify"
                   className={`btn-action-verify ${active ? 'disabled' : ''}`}
                   onClick={startVerification}
                   disabled={active}
-                  style={ok ? { backgroundColor: '#00cc66', borderColor: '#00cc66' } : {}}
                 >
                   {active ? 'Đang phân tích...' : (mode === 'face' ? 'Bắt đầu quét khuôn mặt' : 'Bắt đầu quét Giấy tờ')}
                 </button>
@@ -427,15 +505,15 @@ const clearAllLocalData = () => {
                     KẾT QUẢ ĐỐI CHIẾU THÀNH CÔNG
                   </h4>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', textAlign: 'left' }}>
-                    <p style={{ margin: '2px 0' }}><strong>Họ và Tên:</strong> {user?.fullName || 'Nguyễn Đức Anh'}</p>
-                    <p style={{ margin: '2px 0' }}><strong>MSSV:</strong> {user?.studentId || 'B22DCCN068'}</p>
+                    <p style={{ margin: '2px 0' }}><strong>Họ và Tên:</strong> {user?.fullName}</p>
+                    <p style={{ margin: '2px 0' }}><strong>MSSV:</strong> {user?.studentId}</p>
                     <p style={{ margin: '2px 0' }}><strong>Khoa:</strong> {user?.faculty || "Công nghệ thông tin"}</p>
-                    <p style={{ margin: '2px 0' }}><strong>Ngày sinh:</strong> {user?.dob ? user.dob.split('-').reverse().join('/') : '15/10/2004'}</p>
-                    <p style={{ margin: '2px 0' }}><strong>Chỉ số tin cậy:</strong> <span style={{ color: '#00ff7f', fontWeight: 'bold' }}>98.4% (SIÊU KHỚP)</span></p>
+                    <p style={{ margin: '2px 0' }}><strong>Ngày sinh:</strong> {user?.dob ? user.dob.split('-').reverse().join('/') : ''}</p>
+                    <p style={{ margin: '2px 0' }}><strong>Chỉ số tin cậy:</strong> <span style={{ color: '#00ff7f', fontWeight: 'bold' }}>{confidence.toFixed(1)}% (SIÊU KHỚP)</span></p>
                   </div>
 
                   <button
-                    onClick={() => { setOk(false); setPct(0); }}
+                    onClick={() => { setOk(false); setErrorMatch(false); setPct(0); }}
                     style={{
                       width: '100%',
                       marginTop: '18px',
@@ -447,10 +525,30 @@ const clearAllLocalData = () => {
                       fontWeight: 'bold',
                       cursor: 'pointer',
                       fontSize: '12px',
-                      transition: 'all 0.2s'
                     }}
                   >
                     Thực hiện lại
+                  </button>
+                </div>
+              )}
+
+              {!active && errorMatch && (
+                <div id="match-card-fail" className="db-match-card" style={{ borderColor: 'rgba(239, 68, 68, 0.4)', background: 'rgba(15, 23, 42, 0.85)' }}>
+                  <h4 style={{ textTransform: 'uppercase', color: '#ef4444', fontSize: '13px', fontWeight: 'bold', marginBottom: '14px', borderBottom: '1px solid rgba(239,68,68,0.2)', paddingBottom: '8px' }}>
+                    XÁC THỰC THẤT BẠI ❌
+                  </h4>
+                  <p style={{ fontSize: '14px', color: '#cbd5e1', marginBottom: '16px' }}>
+                    Khuôn mặt hiện tại không khớp với hồ sơ sinh viên <strong>{user?.fullName}</strong> ({user?.studentId}).
+                  </p>
+                  <button
+                    onClick={() => { setOk(false); setErrorMatch(false); setPct(0); }}
+                    style={{
+                      width: '100%', padding: '10px',
+                      background: 'rgba(239, 68, 68, 0.15)', border: '1px solid rgba(239, 68, 68, 0.3)',
+                      borderRadius: '8px', color: '#ef4444', fontWeight: 'bold', cursor: 'pointer'
+                    }}
+                  >
+                    Thử lại
                   </button>
                 </div>
               )}
@@ -476,7 +574,7 @@ const clearAllLocalData = () => {
                       </div>
                       <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '3px', textAlign: 'left' }}>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>HỌ VÀ TÊN / FULL NAME</div>
-                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ffffff' }}>{user?.fullName || 'Nguyễn Đức Anh'}</div>
+                        <div style={{ fontSize: '14px', fontWeight: 'bold', color: '#ffffff' }}>{user?.fullName}</div>
                       </div>
                     </div>
                     
@@ -484,13 +582,13 @@ const clearAllLocalData = () => {
                       <div>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>MSSV / STUDENT ID</div>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#e2e8f0', fontFamily: 'monospace' }}>
-                          {user?.studentId || 'B22DCCN068'}
+                          {user?.studentId}
                         </div>
                       </div>
                       <div>
                         <div style={{ fontSize: '10px', color: '#94a3b8' }}>NGÀY SINH / DATE OF BIRTH</div>
                         <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#e2e8f0' }}>
-                          {user?.dob ? user.dob.split('-').reverse().join('/') : '15/10/2004'}
+                          {user?.dob ? user.dob.split('-').reverse().join('/') : ''}
                         </div>
                       </div>
                     </div>
@@ -512,7 +610,7 @@ const clearAllLocalData = () => {
                   </div>
 
                   <button
-                    onClick={() => { setOk(false); setPct(0); }}
+                    onClick={() => { setOk(false); setErrorMatch(false); setPct(0); }}
                     style={{
                       width: '100%',
                       marginTop: '18px',
@@ -524,7 +622,6 @@ const clearAllLocalData = () => {
                       fontWeight: 'bold',
                       cursor: 'pointer',
                       fontSize: '12px',
-                      transition: 'all 0.2s'
                     }}
                   >
                     Thực hiện lại
@@ -536,13 +633,9 @@ const clearAllLocalData = () => {
 
           <div style={{ textAlign: 'center', marginTop: '20px', fontSize: '12px', color: '#64748b', zIndex: 10 }}>
               © {new Date().getFullYear()} SmartFace ID. Toàn bộ thông tin sinh học và đăng ký được bảo mật theo tiêu chuẩn sở hữu trí tuệ của nhà phát triển.
-
-
           </div>
         </div>
       </main>
-
-      
     </div>
   );
 };

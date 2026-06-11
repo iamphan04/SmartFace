@@ -9,7 +9,12 @@ const Landing = () => {
   const [user, setUser] = useState(null);
   const [users, setUsers] = useState([]);
   const [profile, setProfile] = useState(false);
-  const [modal, setModal] = useState(false);
+  
+  const [modal, setModal] = useState(false); 
+  
+  const [loginModal, setLoginModal] = useState(false); 
+  const [mssvInput, setMssvInput] = useState('');
+  const [loginError, setLoginError] = useState('');
 
   const loadUsersFromStorage = async () => {
     const listStr = localStorage.getItem('smartface_db_users');
@@ -173,40 +178,60 @@ const Landing = () => {
     };
   }, []);
 
-  const clearDatabase = () => {
-    if (window.confirm("Bạn có chắc chắn muốn xóa toàn bộ danh sách tài khoản hiện tại trong Database?")) {
-      localStorage.removeItem('smartface_db_user');
-      localStorage.removeItem('smartface_db_users');
-      setUser(null);
-      setUsers([]);
-      setProfile(false);
-    }
-  };
-
   const handleRegisteredLoginClick = () => {
-    if (user) {
-      navigate('/Dashboard');
-    } else {
-      setModal(true);
+    setLoginError('');
+    setMssvInput('');
+    setLoginModal(true); 
+  }
+  const handleLoginSubmit = async (e) => {
+    if (e) e.preventDefault();
+    const inputClean = mssvInput.trim().toUpperCase();
+
+    if (!inputClean) {
+      setLoginError('Vui lòng nhập MSSV!');
+      return;
     }
-  };
 
-  const createSampleAccountAndNavigate = () => {
-    const sampleUser = {
-      fullName: '',
-      studentId: '',
-      dob: '',
-      faculty: '',
-      email: '',
-      frontCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><circle cx="50" cy="90" r="24" fill="%2338bdf8" opacity="0.2"/><circle cx="50" cy="90" r="16" fill="%233a82f6"/><text x="110" y="55" fill="%2338bdf8" font-size="14" font-weight="bold">THẺ SINH VIÊN</text><text x="110" y="80" fill="%23ffffff" font-size="12">Họ tên:</text><text x="110" y="100" fill="%23ffffff" font-size="12">MSSV: </text><text x="110" y="120" fill="%23cbd5e1" font-size="10">Khoa: </text><text x="110" y="140" fill="%2322c55e" font-size="9" font-weight="bold">● SMARTFACE VERIFIED</text></svg>',
-      backCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><text x="30" y="40" fill="%2394a3b8" font-size="9">CHỮ KÝ SINH VIÊN / STUDENT SIGNATURE</text><line x1="30" y1="70" x2="160" y2="70" stroke="%23ff3366" stroke-width="1.5" stroke-dasharray="2 2"/><text x="30" y="110" fill="%2394a3b8" font-size="9">ĐIỀU KIỆN SỬ DỤNG</text><text x="30" y="130" fill="%23cbd5e1" font-size="8">Thẻ này chỉ dùng trong khuôn viên nhà trường.</text><text x="30" y="145" fill="%23cbd5e1" font-size="8">Mất thẻ vui lòng báo cho phòng công tác SV.</text></svg>',
-      registeredAt: new Date().toLocaleDateString('vi-VN')
-    };
+    setLoginError('');
 
-    localStorage.setItem('smartface_db_user', JSON.stringify(sampleUser));
-    setUser(sampleUser);
-    setModal(false);
-    navigate('/Dashboard');
+    try {
+      const res = await fetch(`http://127.0.0.1:8000/api/users/${inputClean}`);      
+      if (!res.ok) {
+        if (res.status === 404) {
+          throw new Error('Mã số sinh viên (MSSV) này chưa được đăng ký trong hệ thống SQLite.');
+        } else {
+          throw new Error('Không thể kết nối hoặc truy xuất dữ liệu từ Python Server.');
+        }
+      }
+
+      const dbUser = await res.json();
+
+      const finalUser = {
+        ...dbUser,
+        frontCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><circle cx="50" cy="90" r="24" fill="%2338bdf8" opacity="0.2"/><circle cx="50" cy="90" r="16" fill="%233a82f6"/><text x="110" y="55" fill="%2338bdf8" font-size="14" font-weight="bold">THẺ SINH VIÊN</text><text x="110" y="80" fill="%23ffffff" font-size="12">Họ tên:</text><text x="110" y="100" fill="%23ffffff" font-size="12">MSSV: </text><text x="110" y="120" fill="%23cbd5e1" font-size="10">Khoa: </text><text x="110" y="140" fill="%2322c55e" font-size="9" font-weight="bold">● SMARTFACE VERIFIED</text></svg>',
+        backCard: 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="300" height="180" viewBox="0 0 300 180" style="background:%231e293b;border-radius:8px;font-family:sans-serif;"><rect width="298" height="178" x="1" y="1" rx="8" fill="%230f172a" stroke="%2338bdf8" stroke-width="2"/><text x="30" y="40" fill="%2394a3b8" font-size="9">CHỮ KÝ SINH VIÊN / STUDENT SIGNATURE</text><line x1="30" y1="70" x2="160" y2="70" stroke="%23ff3366" stroke-width="1.5" stroke-dasharray="2 2"/><text x="30" y="110" fill="%2394a3b8" font-size="9">ĐIỀU KIỆN SỬ DỤNG</text><text x="30" y="130" fill="%23cbd5e1" font-size="8">Thẻ này chỉ dùng trong khuôn viên nhà trường.</text><text x="30" y="145" fill="%23cbd5e1" font-size="8">Mất thẻ vui lòng báo cho phòng công tác SV.</text></svg>'
+      };
+
+      localStorage.setItem('smartface_db_user', JSON.stringify(finalUser));
+      setUser(finalUser);
+
+      const listStr = localStorage.getItem('smartface_db_users');
+      let usersList = [];
+      if (listStr) {
+        try { usersList = JSON.parse(listStr); } catch (e) {}
+      }
+      usersList = usersList.filter(u => u.studentId !== finalUser.studentId);
+      usersList.push(finalUser);
+      localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
+
+      setLoginModal(false);
+      setMssvInput('');
+
+      navigate('/Dashboard');
+
+    } catch (err) {
+      setLoginError(err.message);
+    }
   };
 
   const features = [
@@ -378,112 +403,243 @@ const Landing = () => {
         </div>
       </main>
 
+      {/* MODAL 1: CẢNH BÁO CHƯA ĐĂNG KÝ (GIỮ NGUYÊN) */}
       {modal && (
-  <div 
-    id="no-account-modal" 
-    className="modal-overlay" 
-    onClick={() => setModal(false)}
-    style={{
-      position: 'fixed',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      background: 'rgba(5, 8, 16, 0.85)',
-      backdropFilter: 'blur(12px)',
-      zIndex: 10000,
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      padding: '24px'
-    }}
-  >
-    <div 
-      className="modal-content" 
-      onClick={(e) => e.stopPropagation()}
-      style={{
-        background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%)',
-        border: '1px solid rgba(239, 68, 68, 0.3)',
-        boxShadow: '0 0 30px rgba(239, 68, 68, 0.15)',
-        borderRadius: '24px',
-        padding: '32px',
-        maxWidth: '500px',
-        width: '100%',
-        textAlign: 'center',
-        animation: 'modalSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)'
-      }}
-    >
-            <div style={{
-        width: '64px',
-        height: '64px',
-        background: 'rgba(239, 68, 68, 0.1)',
-        borderRadius: '50%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        color: '#ef4444',
-        margin: '0 auto 20px auto',
-        border: '1px solid rgba(239, 68, 68, 0.2)'
-      }}>
-        <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
-        </svg>
-      </div>
-
-      <h3 style={{ fontSize: '20px', fontWeight: '800', color: '#ffffff', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-        Yêu cầu đăng nhập tài khoản
-      </h3>
-      
-      <p style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.6', marginBottom: '24px' }}>
-        Hệ thống chưa ghi nhận bất kỳ dữ liệu định danh sinh viên nào từ phía bạn. Vui lòng tiến hành đăng ký tài khoản!
-      </p>
-
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
-        <button
-          id="btn-modal-install"
-          onClick={() => {
-            setModal(false);
-            navigate('/register');
-          }}
-          style={{
-            background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
-            color: '#ffffff',
-            border: 'none',
-            padding: '12px 24px',
-            borderRadius: '12px',
-            fontSize: '14px',
-            fontWeight: '700',
-            cursor: 'pointer',
-            boxShadow: '0 4px 15px rgba(6, 182, 212, 0.25)',
-            transition: 'all 0.2s ease',
-            textTransform: 'uppercase',
-            letterSpacing: '0.5px'
-          }}
-        >
-          Đăng ký tài khoản mới
-        </button>
-        
-        <button
-          id="btn-modal-cancel"
+        <div 
+          id="no-account-modal" 
+          className="modal-overlay" 
           onClick={() => setModal(false)}
           style={{
-            background: 'rgba(255, 255, 255, 0.05)',
-            color: '#e2e8f0',
-            border: '1px solid rgba(255, 255, 255, 0.1)',
-            padding: '12px 24px',
-            borderRadius: '12px',
-            fontSize: '13px',
-            fontWeight: '700',
-            cursor: 'pointer',
-            transition: 'all 0.2s'
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(5, 8, 16, 0.85)',
+            backdropFilter: 'blur(12px)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px'
           }}
         >
-          Về trang chủ đăng nhập mẫu
-        </button>
-      </div>
-    </div>
-  </div>
-)}
+          <div 
+            className="modal-content" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%)',
+              border: '1px solid rgba(239, 68, 68, 0.3)',
+              boxShadow: '0 0 30px rgba(239, 68, 68, 0.15)',
+              borderRadius: '24px',
+              padding: '32px',
+              maxWidth: '500px',
+              width: '100%',
+              textAlign: 'center'
+            }}
+          >
+            <div style={{
+              width: '64px',
+              height: '64px',
+              background: 'rgba(239, 68, 68, 0.1)',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#ef4444',
+              margin: '0 auto 20px auto',
+              border: '1px solid rgba(239, 68, 68, 0.2)'
+            }}>
+              <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+              </svg>
+            </div>
+
+            <h3 style={{ fontSize: '20px', fontWeight: '800', color: '#ffffff', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Yêu cầu đăng ký tài khoản
+            </h3>
+            
+            <p style={{ color: '#cbd5e1', fontSize: '14px', lineHeight: '1.6', marginBottom: '24px' }}>
+              Hệ thống chưa ghi nhận bất kỳ dữ liệu định danh sinh viên nào từ phía bạn. Vui lòng tiến hành đăng ký tài khoản!
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                id="btn-modal-install"
+                onClick={() => {
+                  setModal(false);
+                  navigate('/register');
+                }}
+                style={{
+                  background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 15px rgba(6, 182, 212, 0.25)',
+                  transition: 'all 0.2s ease',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}
+              >
+                Đăng ký tài khoản mới
+              </button>
+              <button
+                id="btn-modal-cancel"
+                onClick={() => setModal(false)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  color: '#e2e8f0',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s'
+                }}
+              >
+                Hủy bỏ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 2: ĐĂNG NHẬP BẰNG MSSV (MỚI THÊM) */}
+      {loginModal && (
+        <div 
+          id="login-account-modal" 
+          className="modal-overlay" 
+          onClick={() => setLoginModal(false)}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(5, 8, 16, 0.85)',
+            backdropFilter: 'blur(12px)',
+            zIndex: 10000,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: '24px'
+          }}
+        >
+          <div 
+            className="modal-content" 
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: 'linear-gradient(135deg, rgba(15, 23, 42, 0.98) 0%, rgba(30, 41, 59, 0.98) 100%)',
+              border: '1px solid rgba(6, 182, 212, 0.3)',
+              boxShadow: '0 0 30px rgba(6, 182, 212, 0.15)',
+              borderRadius: '24px',
+              padding: '32px',
+              maxWidth: '450px',
+              width: '100%',
+              textAlign: 'center'
+            }}
+          >
+            <div style={{
+              width: '64px',
+              height: '64px',
+              background: 'rgba(6, 182, 212, 0.1)',
+              borderRadius: '50%',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: '#06b6d4',
+              margin: '0 auto 20px auto',
+              border: '1px solid rgba(6, 182, 212, 0.2)'
+            }}>
+              <svg width="32" height="32" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z" />
+              </svg>
+            </div>
+
+            <h3 style={{ fontSize: '18px', fontWeight: '800', color: '#ffffff', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+              Xác thực mã sinh viên
+            </h3>
+            
+            <p style={{ color: '#94a3b8', fontSize: '13px', lineHeight: '1.5', marginBottom: '20px' }}>
+              Vui lòng nhập Mã số sinh viên (MSSV) của bạn để kiểm tra tính hợp lệ trên hệ thống.
+            </p>
+
+            <form onSubmit={handleLoginSubmit} style={{ marginBottom: '20px' }}>
+              <input
+                type="text"
+                value={mssvInput}
+                onChange={(e) => setMssvInput(e.target.value)}
+                placeholder="Ví dụ: B22DCCN068"
+                style={{
+                  width: '100%',
+                  padding: '14px 16px',
+                  background: 'rgba(15, 23, 42, 0.8)',
+                  border: '1px solid rgba(6, 182, 212, 0.3)',
+                  borderRadius: '12px',
+                  color: '#ffffff',
+                  fontSize: '14px',
+                  fontWeight: '600',
+                  outline: 'none',
+                  textAlign: 'center',
+                  textTransform: 'uppercase',
+                  letterSpacing: '1px',
+                  boxSizing: 'border-box',
+                  marginBottom: '10px'
+                }}
+              />
+              {loginError && (
+                <div style={{ color: '#ef4444', fontSize: '12px', fontWeight: '600', textAlign: 'center', marginTop: '6px' }}>
+                  ❌ {loginError}
+                </div>
+              )}
+            </form>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>
+              <button
+                type="button"
+                onClick={handleLoginSubmit}
+                style={{
+                  background: 'linear-gradient(135deg, #06b6d4 0%, #3b82f6 100%)',
+                  color: '#ffffff',
+                  border: 'none',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '14px',
+                  fontWeight: '700',
+                  cursor: 'pointer',
+                  boxShadow: '0 4px 15px rgba(6, 182, 212, 0.25)',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.5px'
+                }}
+              >
+                Xác thực & Đi tới quét
+              </button>
+              
+              <button
+                type="button"
+                onClick={() => setLoginModal(false)}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.05)',
+                  color: '#e2e8f0',
+                  border: '1px solid rgba(255, 255, 255, 0.1)',
+                  padding: '12px 24px',
+                  borderRadius: '12px',
+                  fontSize: '13px',
+                  fontWeight: '700',
+                  cursor: 'pointer'
+                }}
+              >
+                Hủy bỏ
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <section id="features-section" className="features-section" style={{ zIndex: 10 }}>
         <div className="container features-grid">
@@ -504,11 +660,9 @@ const Landing = () => {
         <p style={{ color: '#94a3b8', fontSize: '13px', margin: 0, fontWeight: 500 }}>
             © {new Date().getFullYear()} SmartFace ID. Toàn bộ thông tin sinh học và đăng ký được bảo mật theo tiêu chuẩn sở hữu trí tuệ của nhà phát triển.
         </p>
-        <p style={{ color: '#64748b', fontSize: '11px', marginTop: '6px', margin: 0 }}>
-        </p>
       </footer>
     </div>
   );
 };
 
-export default Landing;
+export default Landing; 

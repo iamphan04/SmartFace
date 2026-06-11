@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { db, handleFirestoreError, OperationType } from './database';
 import { doc, setDoc } from 'firebase/firestore';
@@ -18,12 +18,21 @@ const Register = () => {
 
   const [front, setFront] = useState(null);
   const [back, setBack] = useState(null);
-  const docType = 'student_id';
 
   const [rate, setRate] = useState(0);
   const [scanning, setScanning] = useState(false);
   const [status, setStatus] = useState('Sẵn sàng quét khuôn mặt');
   const [done, setDone] = useState(false);
+
+  const [capturedFaces, setCapturedFaces] = useState({
+    front: null,
+    left: null,
+    right: null
+  });
+
+  const videoRef = useRef(null);
+  const canvasRef = useRef(null);
+  const streamRef = useRef(null);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -45,33 +54,90 @@ const Register = () => {
     }
   };
 
+  useEffect(() => {
+    if (step === 3) {
+      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
+        .then(stream => {
+          streamRef.current = stream;
+          if (videoRef.current) {
+            videoRef.current.srcObject = stream;
+          }
+        })
+        .catch(err => {
+          console.error("Lỗi truy cập camera: ", err);
+          setStatus("Không thể truy cập camera. Vui lòng cấp quyền.");
+        });
+    }
+
+    return () => {
+      stopCamera();
+    };
+  }, [step]);
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+    }
+  };
+
+  const captureFrame = () => {
+    if (videoRef.current && canvasRef.current) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      if (context) {
+        canvas.width = video.videoWidth || 640;
+        canvas.height = video.videoHeight || 480;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        return canvas.toDataURL('image/jpeg', 0.95);
+      }
+    }
+    return null;
+  };
+
   const startFaceScan = () => {
     if (scanning) return;
     setScanning(true);
     setRate(0);
     setStatus('Đang khởi động camera quét...');
 
+    const tempFaces = { front: null, left: null, right: null };
     let progress = 0;
+
     const interval = setInterval(() => {
       progress += 2;
       setRate(progress);
 
       if (progress === 20) {
         setStatus('Vui lòng nhìn thẳng vào camera...');
+        const img = captureFrame();
+        if (img) tempFaces.front = img;
       } else if (progress === 50) {
-        setStatus('Vui lòng quay nhẹ mặt sang trái và phải...');
+        setStatus('Vui lòng quay nhẹ mặt sang trái...');
+        const img = captureFrame();
+        if (img) tempFaces.left = img;
       } else if (progress === 80) {
+        setStatus('Vui lòng quay nhẹ mặt sang phải...');
+        const img = captureFrame();
+        if (img) tempFaces.right = img;
+      } else if (progress === 90) {
         setStatus('Đang tối ưu hóa sơ đồ đặc trưng khuôn mặt...');
       } else if (progress >= 100) {
         clearInterval(interval);
         setStatus('Thu thập dữ liệu khuôn mặt hoàn tất!');
         setScanning(false);
         setDone(true);
+        setCapturedFaces(tempFaces);
+        stopCamera();
       }
-    }, 60);
+    }, 80); 
   };
 
   const handleRegisterSubmit = async () => {
+    const finalFront = capturedFaces.front || front; 
+    const finalLeft = capturedFaces.left || finalFront;
+    const finalRight = capturedFaces.right || finalFront;
+
     const userData = {
       ...form,
       frontCard: front,
@@ -81,16 +147,13 @@ const Register = () => {
     };
     
     localStorage.setItem('smartface_db_user', JSON.stringify(userData));
-    
     const existingUsersStr = localStorage.getItem('smartface_db_users');
     let usersList = [];
     if (existingUsersStr) {
       try {
         usersList = JSON.parse(existingUsersStr);
         if (!Array.isArray(usersList)) usersList = [];
-      } catch (e) {
-        usersList = [];
-      }
+      } catch (e) { usersList = []; }
     }
     usersList = usersList.filter((u) => u.studentId !== userData.studentId);
     usersList.push(userData);
@@ -98,18 +161,37 @@ const Register = () => {
 
     try {
       await setDoc(doc(db, 'users', userData.studentId), userData);
-      console.log("Successfully registered to cloud database: users/" + userData.studentId);
     } catch (error) {
-      console.error("Firestore Save Error:", error);
-      try {
-        handleFirestoreError(error, OperationType.WRITE, `users/${userData.studentId}`);
-      } catch (e) {}
+      try { handleFirestoreError(error, OperationType.WRITE, `users/${userData.studentId}`); } catch (e) {}
+    }
+
+    try {
+        const res = await fetch("http://127.0.0.1:8000/api/register", 
+        {        
+          
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fullName:       userData.fullName,
+          studentId:      userData.studentId,
+          dob:            userData.dob,
+          faculty:        userData.faculty,
+          email:          userData.email,
+          registeredAt:   userData.registeredAt,
+          face_front_b64: finalFront,
+          face_left_b64:  finalLeft,
+          face_right_b64: finalRight
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      console.log("✅ Đã lưu thành công vào SQLite qua Python backend");
+    } catch (err) {
+      console.error("❌ Lỗi gửi dữ liệu về Python backend:", err.message);
+      alert("Đăng ký hoàn tất trên Cloud nhưng lỗi lưu trữ SQLite nội bộ: " + err.message);
     }
 
     setStep(4);
-    setTimeout(() => {
-      navigate('/');
-    }, 2500);
+    setTimeout(() => navigate('/'), 2500);
   };
 
   return (
@@ -274,7 +356,18 @@ const Register = () => {
                 <h2 className="control-title">Ghi nhận khuôn mặt sinh trắc học</h2>
                 <p className="control-desc">Vui lòng giữ vị trí thẳng trước camera khi quét.</p>
                 
-                <div className={`video-frame ${scanning ? 'active-scan' : ''}`} style={{ marginBottom: '24px', position: 'relative' }}>
+                <div className={`video-frame ${scanning ? 'active-scan' : ''}`} style={{ marginBottom: '24px', position: 'relative', overflow: 'hidden', height: '360px', background: '#000' }}>
+                  
+                  <canvas ref={canvasRef} style={{ display: 'none' }} />
+
+                  <video 
+                    ref={videoRef} 
+                    autoPlay 
+                    playsInline 
+                    muted
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} 
+                  />
+
                   {scanning && (
                     <>
                       <div className="biometric-scanner-grid"></div>
@@ -294,12 +387,9 @@ const Register = () => {
                       <div className="scan-line" style={{ zIndex: 10 }}></div>
                     </>
                   )}
-                  <div className="video-placeholder" style={{ zIndex: 2 }}>
-                    <svg viewBox="0 0 24 24" fill="currentColor" className="camera-icon">
-                      <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm-1-13h2v6h-2zm0 8h2v2h-2z"/>
-                    </svg>
-                    <p style={{ color: '#fff' }}>Hệ thống camera ghi nhận</p>
-                    <span className="stream-status">{status}</span>
+
+                  <div className="stream-overlay-text" style={{ position: 'absolute', bottom: '10px', left: '10px', color: '#fff', background: 'rgba(0,0,0,0.6)', padding: '4px 10px', borderRadius: '4px', fontSize: '12px', zIndex: 3 }}>
+                    Trạng thái: <span style={{ color: '#00ff7f' }}>{status}</span>
                   </div>
                 </div>
 
