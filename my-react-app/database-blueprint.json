@@ -1,0 +1,27 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Student registration profile",
+      "type": "object",
+      "properties": {
+        "fullName": { "type": "string", "description": "Full name of the student" },
+        "studentId": { "type": "string", "description": "Student ID (MSSV)" },
+        "dob": { "type": "string", "description": "Date of birth" },
+        "faculty": { "type": "string", "description": "Faculty/Department" },
+        "email": { "type": "string", "description": "Contact email" },
+        "frontCard": { "type": "string", "description": "Base64 or URL representation of the student ID front card" },
+        "backCard": { "type": "string", "description": "Base64 or URL representation of the student ID back card" },
+        "faceModel": { "type": "string", "description": "Simulated face model vector" },
+        "registeredAt": { "type": "string", "description": "Date of registration" }
+      },
+      "required": ["fullName", "studentId", "dob"]
+    }
+  },
+  "firestore": {
+    "users": {
+      "schema": "User",
+      "description": "Registered students collection with student ID as document ID"
+    }
+  }
+}
