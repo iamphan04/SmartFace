@@ -38,7 +38,6 @@ async def verify(data: dict):
         }
     
     try:
-        # 1. Get user từ Duy
         user_resp = requests.get(f"{DUY_API}/api/users/{mssv}", timeout=5)
         if user_resp.status_code != 200:
             return {
@@ -55,7 +54,6 @@ async def verify(data: dict):
         db_name = user_data.get("fullName", "")
         name_match = db_name.strip().lower() == name.strip().lower()
         
-        # 2. Verify face từ Duy
         face_resp = requests.post(
             f"{DUY_API}/api/verify-face",
             json={"studentId": mssv, "image": image},
@@ -70,7 +68,6 @@ async def verify(data: dict):
         face_success = face_data.get("success", False)
         face_confidence = face_data.get("confidence", 0.0) / 100.0  # Convert 0-100 to 0-1
         
-        # 3. Calculate fraud score
         fraud_score, reasons = calculate_fraud_score(
             face_sim=face_confidence,
             name_match=name_match
