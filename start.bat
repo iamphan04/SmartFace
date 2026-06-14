@@ -1,14 +1,25 @@
 @echo off
 title He thong xac thuc SmartFace
 
-echo 1. Dang khoi dong Python FastAPI Backend...
-start cmd /k "cd /d D:\AI\SmartFace\database_pdt && python main.py"
+echo Dang khoi dong SmartFace...
+cd /d "%~dp0"
 
-echo 2. Dang khoi dong React Frontend...
-start cmd /k "cd /d D:\AI\SmartFace\frontend && npm run dev"
+if not exist "C:\msys64\ucrt64\bin\python.exe" (
+    echo KHONG TIM THAY PYTHON:
+    echo C:\msys64\ucrt64\bin\python.exe
+    pause
+    exit /b 1
+)
 
-echo 3. Dang tu dong mo trinh duyet...
-timeout /t 3 >nul
-start http://localhost:5174
+if not exist "frontend\dist-app\index.html" (
+    echo Dang build frontend...
+    call npm --prefix frontend run build
+    if errorlevel 1 exit /b 1
+)
 
-echo Khoi dong hoan tat!
+start "" /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:8000"
+"C:\msys64\ucrt64\bin\python.exe" database_pdt\main.py
+
+echo.
+echo SmartFace da dung hoac gap loi.
+pause

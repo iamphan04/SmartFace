@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from './database';
-import { collection, getDocs } from 'firebase/firestore';
 import './App.css';
 
 const Landing = () => {
@@ -42,32 +40,18 @@ const Landing = () => {
     }
 
     try {
-      const snap = await getDocs(collection(db, 'users'));
-      const fbUsers = [];
-      snap.forEach((docSnap) => {
-        fbUsers.push(docSnap.data());
-      });
-      
-      if (fbUsers.length > 0) {
-        const merged = [...fbUsers];
-        usersList.forEach((localU) => {
-          if (!merged.some(u => u.studentId === localU.studentId)) {
-            merged.push(localU);
-          }
-        });
-        usersList = merged;
+      const response = await fetch('/api/users');
+      if (response.ok) {
+        usersList = await response.json();
         localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
-        
-        if (!activeUser && fbUsers.length > 0) {
-          activeUser = fbUsers[0];
+
+        if (!activeUser && usersList.length > 0) {
+          activeUser = usersList[0];
           localStorage.setItem('smartface_db_user', JSON.stringify(activeUser));
         }
       }
     } catch (error) {
-      console.error("Firestore Load Error:", error);
-      try {
-        handleFirestoreError(error, OperationType.LIST, 'users');
-      } catch (e) {}
+      console.error("SmartFace API Load Error:", error);
     }
 
     setUsers(usersList);
@@ -195,7 +179,7 @@ const Landing = () => {
     setLoginError('');
 
     try {
-      const res = await fetch(`http://127.0.0.1:8000/api/users/${inputClean}`);      
+      const res = await fetch(`/api/users/${inputClean}`);
       if (!res.ok) {
         if (res.status === 404) {
           throw new Error('Mã số sinh viên (MSSV) này chưa được đăng ký trong hệ thống SQLite.');
@@ -665,4 +649,4 @@ const Landing = () => {
   );
 };
 
-export default Landing; 
+export default Landing;

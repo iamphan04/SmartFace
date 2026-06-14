@@ -1,5 +1,8 @@
 {
-  "dependencies": {
-    "firebase": "^12.14.0"
+  "scripts": {
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:backend": "C:\\msys64\\ucrt64\\bin\\python.exe database_pdt\\main.py",
+    "build": "npm --prefix frontend run build",
+    "start": "C:\\msys64\\ucrt64\\bin\\python.exe database_pdt\\main.py"
   }
 }

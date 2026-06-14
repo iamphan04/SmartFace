@@ -1,7 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db, handleFirestoreError, OperationType } from './database';
-import { doc, setDoc } from 'firebase/firestore';
 import './Dashboard.css';
 
 const Register = () => {
@@ -30,9 +28,7 @@ const Register = () => {
     right: null
   });
 
-  const videoRef = useRef(null);
-  const canvasRef = useRef(null);
-  const streamRef = useRef(null);
+  const pollRef = useRef(null);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -55,88 +51,73 @@ const Register = () => {
   };
 
   useEffect(() => {
-    if (step === 3) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } })
-        .then(stream => {
-          streamRef.current = stream;
-          if (videoRef.current) {
-            videoRef.current.srcObject = stream;
-          }
-        })
-        .catch(err => {
-          console.error("Lỗi truy cập camera: ", err);
-          setStatus("Không thể truy cập camera. Vui lòng cấp quyền.");
-        });
-    }
-
     return () => {
-      stopCamera();
+      if (pollRef.current) clearInterval(pollRef.current);
     };
-  }, [step]);
+  }, []);
 
-  const stopCamera = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop());
+  const stopCamera = async () => {
+    if (pollRef.current) {
+      clearInterval(pollRef.current);
+      pollRef.current = null;
+    }
+    try {
+      await fetch('/api/camera/stop', { method: 'POST' });
+    } catch (error) {
+      console.warn('Không thể dừng camera FastAPI', error);
     }
   };
 
-  const captureFrame = () => {
-    if (videoRef.current && canvasRef.current) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-      if (context) {
-        canvas.width = video.videoWidth || 640;
-        canvas.height = video.videoHeight || 480;
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        return canvas.toDataURL('image/jpeg', 0.95);
-      }
-    }
-    return null;
-  };
-
-  const startFaceScan = () => {
+  const startFaceScan = async () => {
     if (scanning) return;
     setScanning(true);
     setRate(0);
-    setStatus('Đang khởi động camera quét...');
+    setDone(false);
+    setStatus('Đang khởi động camera FastAPI...');
 
-    const tempFaces = { front: null, left: null, right: null };
-    let progress = 0;
+    try {
+      const response = await fetch(
+        `/api/face/start/${encodeURIComponent(form.studentId)}?purpose=register`,
+        { method: 'POST' }
+      );
+      if (!response.ok) throw new Error(await response.text());
 
-    const interval = setInterval(() => {
-      progress += 2;
-      setRate(progress);
+      pollRef.current = setInterval(async () => {
+        try {
+          const statusResponse = await fetch('/api/face/status');
+          const result = await statusResponse.json();
+          if (!statusResponse.ok) throw new Error(result.detail || 'Lỗi face scanner');
 
-      if (progress === 20) {
-        setStatus('Vui lòng nhìn thẳng vào camera...');
-        const img = captureFrame();
-        if (img) tempFaces.front = img;
-      } else if (progress === 50) {
-        setStatus('Vui lòng quay nhẹ mặt sang trái...');
-        const img = captureFrame();
-        if (img) tempFaces.left = img;
-      } else if (progress === 80) {
-        setStatus('Vui lòng quay nhẹ mặt sang phải...');
-        const img = captureFrame();
-        if (img) tempFaces.right = img;
-      } else if (progress === 90) {
-        setStatus('Đang tối ưu hóa sơ đồ đặc trưng khuôn mặt...');
-      } else if (progress >= 100) {
-        clearInterval(interval);
-        setStatus('Thu thập dữ liệu khuôn mặt hoàn tất!');
-        setScanning(false);
-        setDone(true);
-        setCapturedFaces(tempFaces);
-        stopCamera();
-      }
-    }, 80); 
+          setRate(result.progress || 0);
+          setStatus(result.message || 'Đang quét khuôn mặt...');
+          if (result.completed) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+            setCapturedFaces({
+              front: result.captures?.includes('front') ? 'server' : null,
+              left: result.captures?.includes('left') ? 'server' : null,
+              right: result.captures?.includes('right') ? 'server' : null
+            });
+            setScanning(false);
+            setDone(true);
+          }
+        } catch (error) {
+          clearInterval(pollRef.current);
+          pollRef.current = null;
+          setScanning(false);
+          setStatus(`Lỗi camera FastAPI: ${error.message}`);
+        }
+      }, 400);
+    } catch (error) {
+      setScanning(false);
+      setStatus(`Không thể kết nối FastAPI: ${error.message}`);
+    }
   };
 
   const handleRegisterSubmit = async () => {
-    const finalFront = capturedFaces.front || front; 
-    const finalLeft = capturedFaces.left || finalFront;
-    const finalRight = capturedFaces.right || finalFront;
+    const finalFront = capturedFaces.front === 'server' ? null : capturedFaces.front;
+    const finalLeft = capturedFaces.left === 'server' ? null : capturedFaces.left;
+    const finalRight = capturedFaces.right === 'server' ? null : capturedFaces.right;
 
     const userData = {
       ...form,
@@ -160,13 +141,7 @@ const Register = () => {
     localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
 
     try {
-      await setDoc(doc(db, 'users', userData.studentId), userData);
-    } catch (error) {
-      try { handleFirestoreError(error, OperationType.WRITE, `users/${userData.studentId}`); } catch (e) {}
-    }
-
-    try {
-        const res = await fetch("http://127.0.0.1:8000/api/register", 
+        const res = await fetch("/api/register",
         {        
           
         method: "POST",
@@ -185,9 +160,11 @@ const Register = () => {
       });
       if (!res.ok) throw new Error(await res.text());
       console.log("✅ Đã lưu thành công vào SQLite qua Python backend");
+      await stopCamera();
     } catch (err) {
       console.error("❌ Lỗi gửi dữ liệu về Python backend:", err.message);
       alert("Đăng ký hoàn tất trên Cloud nhưng lỗi lưu trữ SQLite nội bộ: " + err.message);
+      return;
     }
 
     setStep(4);
@@ -358,14 +335,10 @@ const Register = () => {
                 
                 <div className={`video-frame ${scanning ? 'active-scan' : ''}`} style={{ marginBottom: '24px', position: 'relative', overflow: 'hidden', height: '360px', background: '#000' }}>
                   
-                  <canvas ref={canvasRef} style={{ display: 'none' }} />
-
-                  <video 
-                    ref={videoRef} 
-                    autoPlay 
-                    playsInline 
-                    muted
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} 
+                  <img
+                    src="/api/camera/stream"
+                    alt="Camera SmartFace FastAPI"
+                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                   />
 
                   {scanning && (
@@ -406,7 +379,18 @@ const Register = () => {
                 )}
 
                 <div className="btn-group" style={{ display: 'flex', gap: '15px' }}>
-                  <button id="btn-step3-back" className="btn-back" style={{ flex: 1 }} disabled={scanning} onClick={() => setStep(2)}>Quay lại</button>
+                  <button
+                    id="btn-step3-back"
+                    className="btn-back"
+                    style={{ flex: 1 }}
+                    disabled={scanning}
+                    onClick={async () => {
+                      await stopCamera();
+                      setStep(2);
+                    }}
+                  >
+                    Quay lại
+                  </button>
                   {!done ? (
                     <button 
                       id="btn-step3-scan"

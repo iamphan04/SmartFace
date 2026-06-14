@@ -1,7 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { db } from './database';
-import { collection, getDocs } from 'firebase/firestore';
 import './Dashboard.css';
 
 const Dashboard = () => {
@@ -17,8 +15,7 @@ const Dashboard = () => {
   const [confidence, setConfidence] = useState(0); 
   const [mode, setMode] = useState('face');
   const [logs, setLogs] = useState([]);
-  const videoRef = useRef(null);
-  const streamRef = useRef(null);
+  const [streamNonce, setStreamNonce] = useState(0);
   const [showAuthWarning, setShowAuthWarning] = useState(false);
 
   const playBeep = (freq, type, duration) => {
@@ -48,23 +45,12 @@ const Dashboard = () => {
       let usersList = [];
 
       try {
-        const snap = await getDocs(collection(db, 'users'));
-        const fbUsers = [];
-        snap.forEach((docSnap) => {
-          fbUsers.push(docSnap.data());
-        });
-
-        if (fbUsers.length > 0) {
-          usersList = fbUsers;
-          localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
-        } else {
-          const listStr = localStorage.getItem('smartface_db_users');
-          if (listStr) {
-            usersList = JSON.parse(listStr);
-          }
-        }
+        const response = await fetch('/api/users');
+        if (!response.ok) throw new Error(await response.text());
+        usersList = await response.json();
+        localStorage.setItem('smartface_db_users', JSON.stringify(usersList));
       } catch (error) {
-        console.error("Dashboard Firestore Load Error:", error);
+        console.error("Dashboard API Load Error:", error);
         const listStr = localStorage.getItem('smartface_db_users');
         if (listStr) {
           try {
@@ -76,7 +62,7 @@ const Dashboard = () => {
       if (!usersList || usersList.length === 0) {
         usersList = [
           {
-            studentId: '2125110264',
+            studentId: '2125110200',
             fullName: 'Sinh Viên Test',
             faculty: 'Khoa Công nghệ thông tin',
             dob: '2004-10-15',
@@ -101,26 +87,9 @@ const Dashboard = () => {
 
   useEffect(() => {
     return () => {
-      if (streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-      }
+      fetch('/api/camera/stop', { method: 'POST' }).catch(() => {});
     };
   }, []);
-
-  const captureSnapshot = () => {
-    if (!videoRef.current) return null;
-    try {
-      const canvas = document.createElement('canvas');
-      canvas.width = videoRef.current.videoWidth || 640;
-      canvas.height = videoRef.current.videoHeight || 480;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-      return canvas.toDataURL('image/jpeg');
-    } catch (e) {
-      console.error("Lỗi chụp ảnh:", e);
-      return null;
-    }
-  };
 
   const startVerification = async () => {
     if (!user) {
@@ -135,120 +104,87 @@ const Dashboard = () => {
     setPct(0);
     setOk(false);
     setErrorMatch(false);
+    setStreamNonce(Date.now());
     
     if (mode === 'document') {
-      setLogs(['[HỆ THỐNG OCR] Đang phân phối luồng xử lý quét tài liệu...']);
+      setLogs(['[HỆ THỐNG QR] Đang khởi động pdt_QR.py trên FastAPI...']);
     }
     
-    setMsg(mode === 'face' ? 'Đang khởi động kết nối camera...' : 'Đang căn chỉnh camera quét giấy tờ...');
+    setMsg(mode === 'face' ? 'Đang khởi động pdt_face.py...' : 'Đang khởi động pdt_QR.py...');
     playBeep(440, 'sine', 0.1);
 
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.play().catch(e => console.log("Video play error:", e));
+      const startUrl = mode === 'face'
+        ? `/api/face/start/${encodeURIComponent(user.studentId)}?purpose=verify`
+        : '/api/qr/start';
+      const startResponse = await fetch(startUrl, { method: 'POST' });
+      if (!startResponse.ok) throw new Error(await startResponse.text());
+
+      const statusUrl = mode === 'face' ? '/api/face/status' : '/api/qr/status';
+      const startedAt = Date.now();
+      let scannerStatus = null;
+
+      while (Date.now() - startedAt < 45000) {
+        await new Promise(resolve => setTimeout(resolve, 400));
+        const statusResponse = await fetch(statusUrl);
+        scannerStatus = await statusResponse.json();
+        if (!statusResponse.ok) {
+          throw new Error(scannerStatus.detail || 'Không đọc được trạng thái camera');
+        }
+
+        const progress = mode === 'face'
+          ? (scannerStatus.progress || 0)
+          : Math.min(95, Math.round((Date.now() - startedAt) / 300));
+        setPct(progress);
+        setMsg(scannerStatus.message || 'Đang xử lý camera...');
+        if (scannerStatus.completed) break;
       }
-    } catch (err) {
-      console.warn("Could not access physical webcam", err);
-    }
 
-    let currentProgress = 0;
-    const interval = setInterval(async () => {
-      currentProgress += 2;
-      setPct(currentProgress);
-
-      if (currentProgress % 10 === 0 && currentProgress < 100) {
-        playBeep(700 + currentProgress, 'sine', 0.04);
+      if (!scannerStatus?.completed) {
+        throw new Error('Hết thời gian chờ camera. Vui lòng thử lại.');
       }
 
+      const verifyUrl = mode === 'face'
+        ? `/api/face/verify/${encodeURIComponent(user.studentId)}`
+        : `/api/qr/verify/${encodeURIComponent(user.studentId)}`;
+      const verifyResponse = await fetch(verifyUrl, { method: 'POST' });
+      const result = await verifyResponse.json();
+      const success = verifyResponse.ok && result.success;
+
+      setPct(100);
+      setOk(success);
+      setErrorMatch(!success);
       if (mode === 'face') {
-        if (currentProgress === 16) {
-          setMsg('Đang tìm kiếm và căn chỉnh khuôn mặt...');
-        } else if (currentProgress === 46) {
-          setMsg('Đang trích xuất đặc trưng sinh trắc học...');
-        } else if (currentProgress === 76) {
-          setMsg(`Đang đối chiếu với hồ sơ MSSV: ${user?.studentId}...`);
-        }
+        setConfidence(result.confidence || 0);
+        setMsg(success
+          ? `Xác thực thành công! Xin chào ${user.fullName}`
+          : 'Xác thực thất bại! Khuôn mặt không khớp.');
       } else {
-        if (currentProgress === 10) {
-          setLogs(prev => [...prev, `[INFO] Đang dò tìm vật thể và đóng khung biên cạnh Thẻ sinh viên...`]);
-          setMsg('Đang tìm biên cạnh tài liệu...');
-        } else if (currentProgress === 30) {
-          setLogs(prev => [...prev, `[INFO] Đã căn lề tài liệu. Tiến hành phân đoạn ký tự vùng thông tin cá nhân...`]);
-        } else if (currentProgress === 52) {
-          setLogs(prev => [...prev, `[SUCCESS] Đã bóc tách trường văn bản bằng mạng thần kinh nhân tạo OCR...`]);
-          setMsg('Đang giải mã thông tin văn bản...');
-        } else if (currentProgress === 72) {
-          setLogs(prev => [...prev, `[MATCH] Trùng khớp mã định danh sinh viên: ${user?.studentId} trong Cơ sở dữ liệu`]);
-        } else if (currentProgress === 88) {
-          setLogs(prev => [...prev, `[FACE MATCH] Đối tương quan ảnh chân dung Thẻ sinh viên với Gương mặt Live: 98.7% TRÙNG KHỚP`]);
-          setMsg('Đang kiểm tra sinh trắc chân dung...');
-        }
+        setLogs(prev => [
+          ...prev,
+          success
+            ? `[MATCH] QR ${result.qrValue} trùng MSSV ${user.studentId}`
+            : `[ERROR] QR ${result.qrValue || '(trống)'} không trùng MSSV ${user.studentId}`
+        ]);
+        setMsg(success ? 'Mã QR trùng khớp hồ sơ!' : 'Mã QR không trùng hồ sơ.');
       }
- 
-      if (currentProgress >= 100) {
-        clearInterval(interval);
-        
-        if (mode === 'face') {
-          setActive(false);
-          const imageBase64 = captureSnapshot();
-          if (!imageBase64) {
-            setMsg("Không thể chụp ảnh từ Camera. Vui lòng thử lại.");
-            return;
-          }
 
-          setMsg("Đang đối sánh khuôn mặt qua AI Server...");
-
-          try {
-            const response = await fetch('http://localhost:8000/api/verify-face', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                studentId: user.studentId,
-                image: imageBase64
-              })
-            });
-
-            const result = await response.json();
-
-            if (response.ok && result.success) {
-              setOk(true);
-              setErrorMatch(false);
-              setConfidence(result.confidence || 98.4);
-              setMsg(`Xác thực thành công! Xin chào ${user?.fullName}`);
-              
-              playBeep(987.77, 'sine', 0.1);
-              setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
-            } else {
-              setOk(false);
-              setErrorMatch(true);
-              setMsg("Xác thực thất bại! Khuôn mặt không khớp.");
-              playBeep(220, 'sawtooth', 0.4);
-            }
-          } catch (error) {
-            console.error(error);
-            setMsg("Không thể kết nối tới AI Server.");
-            playBeep(220, 'sawtooth', 0.4);
-          }
-
-        } else {
-          setOk(true);
-          setLogs(prev => [...prev, `[XÁC MINH HOÀN TẤT] HỒ SƠ ĐÃ ĐƯỢC THÔNG QUA AN TOÀN TOÀN DIỆN ●`]);
-          setMsg(`Đã đối soát giấy tờ hoàn tất!`);
-          setActive(false);
-          
-          setTimeout(() => playBeep(987.77, 'sine', 0.1), 0);
-          setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
-        }
-
-        if (streamRef.current) {
-          streamRef.current.getTracks().forEach(track => track.stop());
-          streamRef.current = null;
-        }
+      if (success) {
+        playBeep(987.77, 'sine', 0.1);
+        setTimeout(() => playBeep(1318.51, 'sine', 0.25), 110);
+      } else {
+        playBeep(220, 'sawtooth', 0.4);
       }
-    }, 50); 
+    } catch (error) {
+      console.error(error);
+      setOk(false);
+      setErrorMatch(true);
+      setMsg(`Lỗi FastAPI camera: ${error.message}`);
+      playBeep(220, 'sawtooth', 0.4);
+    } finally {
+      setActive(false);
+      fetch('/api/camera/stop', { method: 'POST' }).catch(() => {});
+    }
   };
 
   return (
@@ -268,22 +204,20 @@ const Dashboard = () => {
         <div className="db-container main-grid">
           <div className="video-column">
             <div className={`video-frame ${active ? 'active-scan' : ''}`} style={{ position: 'relative' }}>
-              <video 
-                id="backend-video" 
-                ref={videoRef}
-                autoPlay 
-                playsInline 
-                muted
-                style={{ 
-                  position: 'absolute', 
-                  width: '100%', 
-                  height: '100%', 
-                  objectFit: 'cover', 
-                  zIndex: 2, 
-                  opacity: active ? 1 : 0,
-                  transition: 'opacity 0.4s'
-                }}
-              />
+              {active && (
+                <img
+                  id="backend-video"
+                  src={`/api/camera/stream?v=${streamNonce}`}
+                  alt="Camera SmartFace FastAPI"
+                  style={{
+                    position: 'absolute',
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'cover',
+                    zIndex: 2
+                  }}
+                />
+              )}
               
               {active && mode === 'face' && (
                 <>
@@ -324,7 +258,7 @@ const Dashboard = () => {
                   </div>
                   {active && <div className="id-laser-scanner"></div>}
                   <div className="biometric-hud" style={{ zIndex: 6 }}>
-                    <div className="biometric-hud-box">OCR REGION: AUTO_ALIGN</div>
+                    <div className="biometric-hud-box">QR DETECTOR: PDT_QR</div>
                     <div className="biometric-hud-box">SCAN: {pct}%</div>
                   </div>
                 </>
@@ -339,7 +273,7 @@ const Dashboard = () => {
                 </p>
                 <span className="stream-status">
                   {active 
-                    ? (mode === 'face' ? 'Hệ thống đang quét diện mạo...' : 'Máy quét OCR đang hoạt động...') 
+                    ? (mode === 'face' ? 'Hệ thống đang quét diện mạo...' : 'Máy quét QR đang hoạt động...')
                     : 'Sẵn sàng ghi nhận'}
                 </span>
               </div>
@@ -397,7 +331,7 @@ const Dashboard = () => {
                     <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
                       <path strokeLinecap="round" strokeLinejoin="round" d="M15 9h3.75M15 12h3.75M15 15h3.75M4.5 19.5h15a2.25 2.25 0 002.25-2.25V6.75A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25v10.5A2.25 2.25 0 004.5 19.5zm6-10.125a1.875 1.875 0 11-3.75 0 1.875 1.875 0 013.75 0zm1.294 6.336a6.721 6.721 0 01-3.17.789 6.721 6.721 0 01-3.168-.789 3.376 3.376 0 016.338 0z" />
                     </svg>
-                    Giấy tờ tùy thân (OCR)
+                    Mã QR sinh viên
                   </button>
                 </div>
               )}
@@ -414,7 +348,7 @@ const Dashboard = () => {
                   <>
                     <h2 className="control-title">Đối soát Thẻ sinh viên</h2>
                     <div className="control-desc" style={{ marginBottom: '18px' }}>
-                      Đặt mặt trước Thẻ sinh viên hướng về camera để trích xuất ký tự chữ viết tự động bằng máy quét OCR.
+                      Đưa mã QR sinh viên vào camera để pdt_QR.py đọc và đối chiếu với MSSV đã chọn.
                     </div>
                   </>
                 )
@@ -464,7 +398,7 @@ const Dashboard = () => {
                   onClick={startVerification}
                   disabled={active}
                 >
-                  {active ? 'Đang phân tích...' : (mode === 'face' ? 'Bắt đầu quét khuôn mặt' : 'Bắt đầu quét Giấy tờ')}
+                  {active ? 'Đang phân tích...' : (mode === 'face' ? 'Bắt đầu quét khuôn mặt' : 'Bắt đầu quét QR')}
                 </button>
               )}
 
