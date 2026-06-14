@@ -27,7 +27,10 @@ class CameraManager:
     def _open(self) -> bool:
         if self.camera is not None and self.camera.isOpened():
             return True
-        camera = cv2.VideoCapture(self.camera_index)
+        camera = cv2.VideoCapture(self.camera_index, cv2.CAP_DSHOW)
+        if not camera.isOpened():
+            camera.release()
+            camera = cv2.VideoCapture(self.camera_index)
         camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
         camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
         if not camera.isOpened():
@@ -59,6 +62,7 @@ class CameraManager:
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
         with self.lock:
+            self._close_processor()
             if self.camera is not None:
                 self.camera.release()
             self.camera = None
@@ -67,6 +71,11 @@ class CameraManager:
             self.last_frame_at = 0.0
             self.mode = "idle"
             self.processor = None
+
+    def _close_processor(self) -> None:
+        close = getattr(self.processor, "close", None)
+        if callable(close):
+            close()
 
     def _capture_loop(self) -> None:
         while not self.stop_event.is_set():
@@ -97,18 +106,21 @@ class CameraManager:
         scanner = FaceScanner()
         scanner.reset(student_id, purpose)
         with self.lock:
+            self._close_processor()
             self.processor = scanner
             self.mode = f"face_{purpose}"
         return self.start()
 
     def start_qr(self) -> bool:
         with self.lock:
+            self._close_processor()
             self.processor = QRScanner()
             self.mode = "qr"
         return self.start()
 
     def set_idle(self) -> None:
         with self.lock:
+            self._close_processor()
             self.processor = None
             self.mode = "idle"
 

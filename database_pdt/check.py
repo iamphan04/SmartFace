@@ -1,6 +1,10 @@
 # check.py
 import sqlite3
 import os
+import sys
+
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
 
 DB_PATH = os.path.join(os.path.dirname(__file__), "System.db")
 conn = sqlite3.connect(DB_PATH)

@@ -81,41 +81,53 @@ def init_database() -> None:
     with closing(connect_db()) as conn:
         conn.executescript(
             """
-            CREATE TABLE IF NOT EXISTS persons (
-                id TEXT PRIMARY KEY,
-                name TEXT NOT NULL,
-                created_at TEXT DEFAULT (datetime('now', 'localtime'))
-            );
-
             CREATE TABLE IF NOT EXISTS profiles (
-                person_id TEXT PRIMARY KEY,
+                student_id TEXT PRIMARY KEY,
+                full_name TEXT NOT NULL,
                 dob TEXT DEFAULT '',
                 faculty TEXT DEFAULT '',
                 email TEXT DEFAULT '',
                 registered_at TEXT DEFAULT '',
-                FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                created_at TEXT DEFAULT (datetime('now', 'localtime'))
             );
 
             CREATE TABLE IF NOT EXISTS face_images (
-                person_id TEXT PRIMARY KEY,
-                face_data BLOB NOT NULL,
-                face_data_left BLOB,
-                face_data_right BLOB,
+                student_id TEXT PRIMARY KEY,
+                front_image BLOB NOT NULL,
+                left_image BLOB NOT NULL,
+                right_image BLOB NOT NULL,
+                source TEXT NOT NULL DEFAULT 'frontend',
                 updated_at TEXT DEFAULT (datetime('now', 'localtime')),
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
-                FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE
+                FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS processed_faces (
+                student_id TEXT PRIMARY KEY,
+                front_processed BLOB NOT NULL,
+                left_processed BLOB NOT NULL,
+                right_processed BLOB NOT NULL,
+                processing_status TEXT NOT NULL DEFAULT 'ready',
+                processed_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS check_fail (
+                id INTEGER PRIMARY KEY,
+                student_id TEXT,
+                captured_face BLOB,
+                face_similarity REAL NOT NULL DEFAULT 0,
+                confidence REAL NOT NULL DEFAULT 0,
+                risk_score INTEGER NOT NULL DEFAULT 100,
+                risk_level TEXT NOT NULL DEFAULT 'CRITICAL',
+                reasons TEXT DEFAULT '',
+                checked_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE SET NULL
             );
             """
         )
-        columns = {
-            row["name"] for row in conn.execute("PRAGMA table_info(face_images)")
-        }
-        if "face_data_left" not in columns:
-            conn.execute("ALTER TABLE face_images ADD COLUMN face_data_left BLOB")
-        if "face_data_right" not in columns:
-            conn.execute("ALTER TABLE face_images ADD COLUMN face_data_right BLOB")
         conn.commit()
-
 
 def decode_image(value: str) -> np.ndarray:
     try:
@@ -143,7 +155,11 @@ def decode_blob(blob: bytes) -> Optional[np.ndarray]:
 
 
 def crop_face(image: np.ndarray) -> np.ndarray:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    gray = (
+        image
+        if image.ndim == 2
+        else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    )
     haarcascades = getattr(getattr(cv2, "data", None), "haarcascades", "")
     cascade_path = f"{haarcascades}haarcascade_frontalface_default.xml"
     if not haarcascades or not Path(cascade_path).is_file():
@@ -159,9 +175,23 @@ def crop_face(image: np.ndarray) -> np.ndarray:
     return gray[y : y + height, x : x + width]
 
 
+def process_face(image: np.ndarray) -> np.ndarray:
+    face = crop_face(image)
+    face = cv2.resize(face, (256, 256), interpolation=cv2.INTER_AREA)
+    return cv2.equalizeHist(face)
+
+
+def comparison_face(image: np.ndarray) -> np.ndarray:
+    if image.ndim == 2 and image.shape == (256, 256):
+        return image
+    if image.ndim == 3 and image.shape[:2] == (256, 256):
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return process_face(image)
+
+
 def compare_faces(registered: np.ndarray, captured: np.ndarray) -> float:
-    left = cv2.equalizeHist(cv2.resize(crop_face(registered), (128, 128)))
-    right = cv2.equalizeHist(cv2.resize(crop_face(captured), (128, 128)))
+    left = cv2.resize(comparison_face(registered), (128, 128))
+    right = cv2.resize(comparison_face(captured), (128, 128))
 
     left_vector = left.astype(np.float32).reshape(-1)
     right_vector = right.astype(np.float32).reshape(-1)
@@ -182,8 +212,8 @@ def compare_faces(registered: np.ndarray, captured: np.ndarray) -> float:
 
 def user_payload(row: sqlite3.Row) -> dict:
     return {
-        "studentId": row["id"],
-        "fullName": row["name"],
+        "studentId": row["student_id"],
+        "fullName": row["full_name"],
         "dob": row["dob"] or "",
         "faculty": row["faculty"] or "",
         "email": row["email"] or "",
@@ -192,27 +222,13 @@ def user_payload(row: sqlite3.Row) -> dict:
     }
 
 
-def user_query(conn: sqlite3.Connection) -> str:
-    legacy_table = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='person_id'"
-    ).fetchone()
-    legacy_join = (
-        "LEFT JOIN person_id legacy ON legacy.person_id = p.id"
-        if legacy_table
-        else "LEFT JOIN (SELECT NULL AS person_id) legacy ON 0"
-    )
-    return f"""
-        SELECT p.id, p.name, p.created_at,
-               COALESCE(pr.dob, '') AS dob,
-               COALESCE(pr.faculty, '') AS faculty,
-               COALESCE(pr.email, '') AS email,
-               COALESCE(pr.registered_at, '') AS registered_at,
-               CASE WHEN fi.person_id IS NOT NULL OR legacy.person_id IS NOT NULL
-                    THEN 1 ELSE 0 END AS has_face
-        FROM persons p
-        LEFT JOIN profiles pr ON pr.person_id = p.id
-        LEFT JOIN face_images fi ON fi.person_id = p.id
-        {legacy_join}
+def user_query() -> str:
+    return """
+        SELECT p.student_id, p.full_name, p.dob, p.faculty, p.email,
+               p.registered_at, p.created_at,
+               CASE WHEN pf.student_id IS NOT NULL THEN 1 ELSE 0 END AS has_face
+        FROM profiles p
+        LEFT JOIN processed_faces pf ON pf.student_id = p.student_id
     """
 
 
@@ -347,7 +363,7 @@ def verify_qr(student_id: str) -> dict:
 def list_users() -> list[dict]:
     with closing(connect_db()) as conn:
         rows = conn.execute(
-            f"{user_query(conn)} ORDER BY p.created_at DESC, p.id"
+            f"{user_query()} ORDER BY p.created_at DESC, p.student_id"
         ).fetchall()
     return [user_payload(row) for row in rows]
 
@@ -356,7 +372,7 @@ def list_users() -> list[dict]:
 def get_user(student_id: str) -> dict:
     with closing(connect_db()) as conn:
         row = conn.execute(
-            f"{user_query(conn)} WHERE p.id = ?", (student_id.upper(),)
+            f"{user_query()} WHERE p.student_id = ?", (student_id.upper(),)
         ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Khong tim thay sinh vien.")
@@ -389,39 +405,75 @@ def register_user(data: RegisterData) -> dict:
             detail="Chua co anh khuon mat. Hay quet qua camera FastAPI truoc.",
         )
 
-    blobs = [encode_jpeg(image) if image is not None else None for image in images]
+    if any(image is None for image in images):
+        images = [
+            images[0],
+            images[1] if images[1] is not None else images[0],
+            images[2] if images[2] is not None else images[0],
+        ]
+
+    raw_blobs = [encode_jpeg(image) for image in images]
+    processed_blobs = [encode_jpeg(process_face(image)) for image in images]
+    image_source = "camera" if all(value is None for value in (
+        data.face_front_b64,
+        data.face_left_b64,
+        data.face_right_b64,
+    )) else "frontend"
+
     with closing(connect_db()) as conn:
         try:
             conn.execute(
                 """
-                INSERT INTO persons(id, name) VALUES(?, ?)
-                ON CONFLICT(id) DO UPDATE SET name = excluded.name
-                """,
-                (student_id, data.fullName.strip()),
-            )
-            conn.execute(
-                """
-                INSERT INTO profiles(person_id, dob, faculty, email, registered_at)
-                VALUES(?, ?, ?, ?, ?)
-                ON CONFLICT(person_id) DO UPDATE SET
+                INSERT INTO profiles(
+                    student_id, full_name, dob, faculty, email, registered_at
+                )
+                VALUES(?, ?, ?, ?, ?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET
+                    full_name = excluded.full_name,
                     dob = excluded.dob,
                     faculty = excluded.faculty,
                     email = excluded.email,
-                    registered_at = excluded.registered_at
+                    registered_at = excluded.registered_at,
+                    updated_at = datetime('now', 'localtime')
                 """,
-                (student_id, data.dob, data.faculty, data.email, data.registeredAt),
+                (
+                    student_id,
+                    data.fullName.strip(),
+                    data.dob,
+                    data.faculty,
+                    data.email,
+                    data.registeredAt,
+                ),
             )
             conn.execute(
                 """
-                INSERT INTO face_images(person_id, face_data, face_data_left, face_data_right)
-                VALUES(?, ?, ?, ?)
-                ON CONFLICT(person_id) DO UPDATE SET
-                    face_data = excluded.face_data,
-                    face_data_left = excluded.face_data_left,
-                    face_data_right = excluded.face_data_right,
+                INSERT INTO face_images(
+                    student_id, front_image, left_image, right_image, source
+                )
+                VALUES(?, ?, ?, ?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET
+                    front_image = excluded.front_image,
+                    left_image = excluded.left_image,
+                    right_image = excluded.right_image,
+                    source = excluded.source,
                     updated_at = datetime('now', 'localtime')
                 """,
-                (student_id, blobs[0], blobs[1], blobs[2]),
+                (student_id, *raw_blobs, image_source),
+            )
+            conn.execute(
+                """
+                INSERT INTO processed_faces(
+                    student_id, front_processed, left_processed, right_processed
+                )
+                VALUES(?, ?, ?, ?)
+                ON CONFLICT(student_id) DO UPDATE SET
+                    front_processed = excluded.front_processed,
+                    left_processed = excluded.left_processed,
+                    right_processed = excluded.right_processed,
+                    processing_status = 'ready',
+                    processed_at = datetime('now', 'localtime')
+                """,
+                (student_id, *processed_blobs),
             )
             conn.commit()
         except sqlite3.Error as exc:
@@ -443,25 +495,12 @@ def verify_face_image(student_id: str, captured: np.ndarray) -> dict:
     with closing(connect_db()) as conn:
         row = conn.execute(
             """
-            SELECT face_data, face_data_left, face_data_right
-            FROM face_images WHERE person_id = ?
+            SELECT front_processed, left_processed, right_processed
+            FROM processed_faces WHERE student_id = ?
             """,
             (student_id,),
         ).fetchone()
         stored_blobs = list(row) if row else []
-        if not stored_blobs:
-            has_legacy = conn.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='person_id'"
-            ).fetchone()
-            legacy = (
-                conn.execute(
-                    "SELECT face_embedding FROM person_id WHERE person_id = ?",
-                    (student_id,),
-                ).fetchone()
-                if has_legacy
-                else None
-            )
-            stored_blobs = [legacy[0]] if legacy else []
 
     registered_images = [decode_blob(blob) for blob in stored_blobs if blob]
     registered_images = [image for image in registered_images if image is not None]
@@ -474,7 +513,7 @@ def verify_face_image(student_id: str, captured: np.ndarray) -> dict:
         face_sim=similarity, name_match=True
     )
     risk_level, decision = get_risk_level(fraud_score)
-    return {
+    result = {
         "success": decision == "PASS",
         "decision": decision,
         "risk_score": fraud_score,
@@ -485,6 +524,28 @@ def verify_face_image(student_id: str, captured: np.ndarray) -> dict:
         "all_scores": [round(score, 4) for score in scores],
         "studentId": student_id,
     }
+    if decision != "PASS":
+        with closing(connect_db()) as conn:
+            conn.execute(
+                """
+                INSERT INTO check_fail(
+                    student_id, captured_face, face_similarity, confidence,
+                    risk_score, risk_level, reasons
+                )
+                VALUES(?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    student_id,
+                    encode_jpeg(process_face(captured)),
+                    result["face_similarity"],
+                    result["confidence"],
+                    fraud_score,
+                    risk_level,
+                    ", ".join(reasons),
+                ),
+            )
+            conn.commit()
+    return result
 
 
 @app.post("/api/face/verify/{student_id}")
@@ -514,7 +575,7 @@ def verify_document(data: VerifyDocumentData) -> dict:
 
     with closing(connect_db()) as conn:
         row = conn.execute(
-            "SELECT name FROM persons WHERE id = ?", (student_id,)
+            "SELECT full_name FROM profiles WHERE student_id = ?", (student_id,)
         ).fetchone()
     if not row:
         return {
@@ -528,7 +589,7 @@ def verify_document(data: VerifyDocumentData) -> dict:
 
     name_match = (
         not data.name
-        or row["name"].strip().casefold() == data.name.strip().casefold()
+        or row["full_name"].strip().casefold() == data.name.strip().casefold()
     )
     fraud_score, reasons = calculate_fraud_score(
         face_sim=1.0 if name_match else 0.0,

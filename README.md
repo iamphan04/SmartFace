@@ -9,6 +9,15 @@ SmartFace now uses one FastAPI server and one SQLite database:
 
 ## Run
 
+For the first installation, run:
+
+```powershell
+.\install-python.bat
+```
+
+This creates `.venv-smartface312` with the pinned Python dependencies used
+by MediaPipe, OpenCV, pyzbar, and FastAPI.
+
 Double-click `start.bat`, or run:
 
 ```powershell

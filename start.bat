@@ -4,9 +4,12 @@ title He thong xac thuc SmartFace
 echo Dang khoi dong SmartFace...
 cd /d "%~dp0"
 
-if not exist "C:\msys64\ucrt64\bin\python.exe" (
-    echo KHONG TIM THAY PYTHON:
-    echo C:\msys64\ucrt64\bin\python.exe
+set "PYTHON=%~dp0.venv-smartface312\Scripts\python.exe"
+
+if not exist "%PYTHON%" (
+    echo KHONG TIM THAY MOI TRUONG PYTHON:
+    echo %PYTHON%
+    echo Hay chay: install-python.bat
     pause
     exit /b 1
 )
@@ -18,7 +21,7 @@ if not exist "frontend\dist-app\index.html" (
 )
 
 start "" /b cmd /c "timeout /t 2 /nobreak >nul && start http://localhost:8000"
-"C:\msys64\ucrt64\bin\python.exe" database_pdt\main.py
+"%PYTHON%" database_pdt\main.py
 
 echo.
 echo SmartFace da dung hoac gap loi.
