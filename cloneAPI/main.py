@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import sqlite3
 import numpy as np
 from fraud_engine import cosine_similarity
+from pathlib import Path
 
 app = FastAPI()
 
@@ -14,7 +15,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-DB_PATH = "System.db"
+DB_PATH = Path(__file__).with_name("System.db")
 
 
 @app.get("/health")

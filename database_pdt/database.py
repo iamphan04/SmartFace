@@ -1,8 +1,9 @@
 import sqlite3
 import numpy as np
 import cv2
+from pathlib import Path
 
-DB_PATH = "System.db"
+DB_PATH = Path(__file__).with_name("System.db")
 
 def init_database():
     with sqlite3.connect(DB_PATH) as conn:
@@ -22,6 +23,14 @@ def init_database():
                 FOREIGN KEY(person_id) REFERENCES persons(id) ON DELETE CASCADE
             );
         """)
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(face_images)").fetchall()
+        }
+        if "face_data_left" not in columns:
+            conn.execute("ALTER TABLE face_images ADD COLUMN face_data_left BLOB")
+        if "face_data_right" not in columns:
+            conn.execute("ALTER TABLE face_images ADD COLUMN face_data_right BLOB")
 
 def add_person(person_id: str, name: str) -> bool:
     try:

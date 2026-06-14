@@ -15,6 +15,9 @@ last_scanned = None
 status_text = "Hay quet QR code..."
 status_color = (255, 255, 255) # Mặc định màu trắng
 text_display_expiry = 0        # Thời gian hết hạn của thông báo ngắn hạn
+save_QR = False 
+talk_time = None
+img_card = None
 
 while True:
     ret, frame = cap.read()
@@ -22,7 +25,7 @@ while True:
         print("Không thể kết nối với camera.")
         break
     frame = cv2.flip(frame, 1)
-    current_time = time.time()
+    current_time = time.time() 
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (3, 3), 0) # Sử dụng ma trận lọc 3x3 để làm mịn nhẹ
     
@@ -30,6 +33,9 @@ while True:
     barcodes = pyzbar.decode(blurred)
     
     for barcode in barcodes:
+        if not save_QR:
+            save_QR = True 
+            talk_time = current_time
         raw = barcode.data.decode("utf-8")
         
         # Vẽ khung vuông màu xanh lá quanh mã QR đang quét
@@ -59,21 +65,32 @@ while True:
         text_display_expiry = current_time + 3.0
 
     # LOGIC ĐỔI CHỮ: Nếu hết 3 giây mà không có QR mới, quay về chữ mặc định
-    if current_time > text_display_expiry:
+    if current_time > text_display_expiry and not save_QR:
         status_text = "Hay quet QR code..."
         status_color = (255, 255, 255) # Quay về màu trắng
         last_scanned = None             # Reset bộ lọc để có thể quét lại chính mã đó nếu muốn
 
-    # TẠO KHUNG NỀN ĐEN PHÍA TRÊN ĐỂ CHỮ NỔI BẬT HƠN (Tùy chọn thẩm mỹ)
-    # Vẽ một hình chữ nhật màu đen mờ từ góc (0,0) đến (640, 50) để làm nền cho chữ
     cv2.rectangle(frame, (0, 0), (frame.shape[1], 50), (0, 0, 0), -1)
 
     # HIỂN THỊ CHỮ LÊN MÀN HÌNH
     # Tọa độ (20, 32) là vị trí xuất hiện của chữ (X=20, Y=32)
     cv2.putText(frame, status_text, (20, 32),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+    
+    if save_QR :
+        star_time = int(current_time - talk_time)
+        status_text = f"thoi gian chup the {star_time}"
+        cv2.putText(frame,status_text, (20, 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+        if star_time >= 5 :
+            img_card = frame.copy()
+            status_text = f"luu anh the {raw} thanh cong"
+            database.save_img_card(raw, img_card)
+            cv2.putText(frame,status_text, (20, 32),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, status_color, 2)
+            cv2.waitKey(3000)
 
-    # Hiển thị cửa sổ Webcam
+            
     cv2.imshow("He thong quet QR", frame)
     
     # Nhấn 'q' để thoát
