@@ -4,29 +4,35 @@ from numpy.linalg import norm
 def cosine_similarity(v1, v2):
     return np.dot(v1, v2) / (norm(v1) * norm(v2) + 1e-8)
 
-def calculate_trust_score(data):
-    risk = 0
-    face_score = data.get('face_match', {}).get('data', {}).get('match_score', 0)
-    if face_score < 75: risk += 40
-    elif face_score < 85: risk += 20
-    
-    is_live = data.get('liveness', {}).get('data', {}).get('is_live', False)
-    if not is_live: risk += 60
-    
-    has_mask = data.get('mask', {}).get('data', {}).get('has_mask', False)
-    if has_mask: risk += 20
-    
-    return max(0, min(100, 100 - risk))
-
-def get_decision(score):
-    if score >= 70: return "PASS", "✅", "SAFE"
-    elif score >= 40: return "FAIL", "⚠️", "SUSPICIOUS"
-    else: return "FAIL", "🚨", "HIGH RISK"
-
-def get_reasons(data):
+def calculate_fraud_score(face_sim=None, name_match=True):
+    """Tính fraud score (0-100)"""
+    score = 0
     reasons = []
-    face = data.get('face_match', {}).get('data', {}).get('match_score', 0)
-    if face < 75: reasons.append(f"Low similarity: {face}%")
-    if not data.get('liveness', {}).get('data', {}).get('is_live', False): reasons.append("No liveness")
-    if data.get('mask', {}).get('data', {}).get('has_mask', False): reasons.append("Mask detected")
-    return reasons
+    
+    if face_sim is None or face_sim < 0.7:
+        sim_str = f"{face_sim:.2f}" if face_sim is not None else "0.00"
+        score += 60
+        reasons.append(f"Face mismatch: {sim_str}")
+    
+    if not name_match:
+        score += 40
+        reasons.append("Name mismatch")
+    
+    return min(100, score), reasons
+
+def get_risk_level(fraud_score):
+    """fraud_score → (risk_level, decision)"""
+    if fraud_score <= 20:
+        return "LOW", "PASS"
+    elif fraud_score <= 50:
+        return "MEDIUM", "PASS"
+    elif fraud_score <= 70:
+        return "HIGH", "FAIL"
+    else:
+        return "CRITICAL", "FAIL"
+
+def get_confidence(face_sim):
+    """face_sim → confidence% (0-100)"""
+    if face_sim is None:
+        return 0.0
+    return round(min(100, face_sim * 100), 1)

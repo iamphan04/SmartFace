@@ -1,0 +1,6 @@
+.venv/
+.venv-*/
+__pycache__/
+*.py[cod]
+.cache/
+database_pdt/System.backup-*.db

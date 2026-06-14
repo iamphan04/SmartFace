@@ -1,189 +1,216 @@
+import os
+import time
+from pathlib import Path
+
 import cv2
 import mediapipe as mp
+import numpy as np
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
-import urllib.request
-import os
-import database
-import numpy as np
-import time
 
-MODEL_PATH = 'face_landmarker.task'
-MODEL_URL = (
-    "https://storage.googleapis.com/mediapipe-models/"
-    "face_landmarker/face_landmarker/float16/1/face_landmarker.task"
+import database
+
+BASE_DIR = Path(__file__).resolve().parent
+MODEL_PATH = BASE_DIR / "face_landmarker.task"
+os.environ.setdefault("MPLCONFIGDIR", str(BASE_DIR.parent / ".cache" / "matplotlib"))
+
+CAPTURE_STEPS = (
+    ("front", "Nhin thang vao camera"),
+    ("left", "Quay mat nhe sang trai"),
+    ("right", "Quay mat nhe sang phai"),
 )
 
-FACE_PERSONS = [
-    ("nhin vao camera", "front"), 
-    ("nhin sang trai", "left"), 
-    ("nhin sang phai", "right")
-]
-star_time = time.time() 
-def download_model():
-    if not os.path.exists(MODEL_PATH):
-        print("Đang tải model AI...")
-        urllib.request.urlretrieve(MODEL_URL, MODEL_PATH)
-        print("Tải xong!")
 
 def build_detector():
-    opts = vision.FaceLandmarkerOptions(
-        base_options=python.BaseOptions(model_asset_path=MODEL_PATH),
+    if not MODEL_PATH.is_file():
+        raise FileNotFoundError(f"Khong tim thay model: {MODEL_PATH}")
+    options = vision.FaceLandmarkerOptions(
+        base_options=python.BaseOptions(model_asset_path=str(MODEL_PATH)),
         output_face_blendshapes=False,
         output_facial_transformation_matrixes=False,
-        num_faces=1
+        num_faces=1,
     )
-    return vision.FaceLandmarker.create_from_options(opts)
+    return vision.FaceLandmarker.create_from_options(options)
 
-def get_face_bbox(landmarks, w, h, padding=30):
-    xs = [int(lm.x * w) for lm in landmarks]
-    ys = [int(lm.y * h) for lm in landmarks]
+
+def get_face_bbox(landmarks, width: int, height: int, padding: int = 30):
+    xs = [int(point.x * width) for point in landmarks]
+    ys = [int(point.y * height) for point in landmarks]
     return (
         max(0, min(xs) - padding),
         max(0, min(ys) - padding),
-        min(w, max(xs) + padding),
-        min(h, max(ys) + padding)
+        min(width, max(xs) + padding),
+        min(height, max(ys) + padding),
     )
-def m_eye(lms, h, w)->bool:
-    # mat phai mi tren 
-    x_right_max = int(lms[159].x*w)
-    y_right_max= int(lms[159].y*h)
-    # mat phai mi duoi 
-    x_right_min = int(lms[145].x*w)
-    y_right_min = int(lms[145].y*h)
-    # mat trai mi tren
-    x_left_max = int(lms[386].x*w)
-    y_left_max = int(lms[386].y*h)
-    #mat trai mi duoi 
-    x_left_min = int(lms[374].x*w)
-    y_left_min = int(lms[374].y*h)
-    # nham mat trai
-    close_eye_left = np.hypot((x_left_max - x_left_min), (y_left_max - y_left_min))
-    # nham mat phai
-    close_eye_right = np.hypot((x_right_max - x_right_min), (y_right_max-y_right_min))
-
-    if close_eye_left < 10 and close_eye_right < 10:
-        return True
-    return False
 
 
-def save_true(face_crop, h, w, person_id):
-    confirm = np.zeros((h, w, 3), dtype=np.uint8)
-    fh, fw = face_crop.shape[:2]
-    scale = min(300/fh, 300/fw)
-    face_resized = cv2.resize(face_crop, (int(fw*scale), int(fh*scale)))
-    fh2, fw2 = face_resized.shape[:2]
-    y_offset = h//2 - fh2//2 - 30
-    x_offset = w//2 - fw2//2
-    confirm[y_offset:y_offset+fh2, x_offset:x_offset+fw2] = face_resized
-    cv2.rectangle(confirm, (x_offset-2, y_offset-2),
-                  (x_offset+fw2+2, y_offset+fh2+2), (0, 255, 0), 2)
-    cv2.putText(confirm, "LUU THANH CONG!", (w//2 - 130, y_offset + fh2 + 50),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 255, 0), 2)
-    cv2.putText(confirm, f"ID: {person_id}", (w//2 - 100, y_offset + fh2 + 90),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-    cv2.putText(confirm, "Cua so se tu dong dong sau 3 giay...", (w//2 - 210, y_offset + fh2 + 125),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
-    cv2.imshow("chup khuon mat", confirm)
-    cv2.waitKey(3000)  
+class FaceScanner:
+    """Capture front, left, and right face images from camera frames."""
 
-def main():
-    database.init_database()
-    person_id = input("Nhập mã người dùng: ").strip()
-    if not database.person_exists(person_id):
-        print("Không tìm thấy! Hãy chạy qr_scan.py trước.")
-        return
+    def __init__(self, capture_delay: float = 1.8):
+        self.capture_delay = max(0.1, capture_delay)
+        self.detector = build_detector()
+        self.reset()
 
-    download_model()
-    detector = build_detector()
-    cap = cv2.VideoCapture(0)
+    def reset(self, student_id: str = "", purpose: str = "register") -> None:
+        self.student_id = student_id
+        self.purpose = purpose
+        self.steps = CAPTURE_STEPS[:1] if purpose == "verify" else CAPTURE_STEPS
+        self.step_index = 0
+        self.captures: dict[str, np.ndarray] = {}
+        self.phase_started_at = time.monotonic()
+        self.completed = False
+        self.face_detected = False
+        self.progress = 0
+        self.message = "Dang tim khuon mat"
+        self.error = ""
 
-    if not cap.isOpened():
-        print("Không mở được camera!")
-        return
-
-    print("Q = thoát")
-    captured = {}
-    step_idx = 0
-    face_crop = None
-    time_talk = None
-    lms = None
-    eye_drown = False
-    show = False
-    while True:
-        if show :
-            cv2.waitKey(1)
-            continue
-        ret, frame = cap.read()
-        if not ret:
-            break
-
-        frame = cv2.flip(frame, 1)
-        h, w = frame.shape[:2]
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        mp_img = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-        result = detector.detect(mp_img)
+    def process_frame(self, frame: np.ndarray) -> np.ndarray:
+        display = cv2.flip(frame, 1)
+        height, width = display.shape[:2]
+        rgb = cv2.cvtColor(display, cv2.COLOR_BGR2RGB)
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+        result = self.detector.detect(mp_image)
+        landmarks = result.face_landmarks[0] if result.face_landmarks else None
+        self.face_detected = landmarks is not None
         face_crop = None
 
-        if result.face_landmarks:
-            lms = result.face_landmarks[0]
-            x1, y1, x2, y2 = get_face_bbox(lms, w, h)
-            face_crop = frame[y1:y2, x1:x2].copy()
-            
+        if landmarks is not None:
+            x1, y1, x2, y2 = get_face_bbox(landmarks, width, height)
+            face_crop = display[y1:y2, x1:x2].copy()
+            cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 120), 2)
+            for point in landmarks[::8]:
+                cv2.circle(
+                    display,
+                    (int(point.x * width), int(point.y * height)),
+                    1,
+                    (0, 255, 120),
+                    -1,
+                )
 
-            # Vẽ landmarks
-            for lm in lms:
-                cv2.circle(frame, (int(lm.x * w), int(lm.y * h)), 1, (0, 255, 0), -1)
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+        if self.completed:
+            self.progress = 100
+            self.message = "Da thu thap du lieu khuon mat"
+        elif face_crop is None or face_crop.size == 0:
+            self.phase_started_at = time.monotonic()
+            self.message = "Chua tim thay khuon mat"
+        else:
+            step_key, instruction = self.steps[self.step_index]
+            elapsed = time.monotonic() - self.phase_started_at
+            step_progress = min(1.0, elapsed / self.capture_delay)
+            self.progress = round(
+                ((self.step_index + step_progress) / len(self.steps)) * 100
+            )
+            self.message = instruction
+            if elapsed >= self.capture_delay:
+                self.captures[step_key] = face_crop
+                self.step_index += 1
+                self.phase_started_at = time.monotonic()
+                if self.step_index >= len(self.steps):
+                    self.completed = True
+                    self.progress = 100
+                    self.message = "Da thu thap du lieu khuon mat"
 
-        # HUD
-        step_text, step_key =  FACE_PERSONS[step_idx]
-        cv2.rectangle(frame, (0, 0), (w, 70), (0, 0, 0), -1)
-        cv2.putText(frame, f"ID: {person_id}", (10, 25),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        status = "Nhấn SPACE để chụp" if face_crop is not None else "Chưa thấy mặt!"
-        color  = (0, 255, 0)        if face_crop is not None else (0, 0, 255)
-        cv2.putText(frame, status, (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+        self._draw_hud(display)
+        return display
 
-        cv2.imshow("chup khuon mat", frame)
-        key = cv2.waitKey(1) & 0xFF
+    def _draw_hud(self, frame: np.ndarray) -> None:
+        height, width = frame.shape[:2]
+        cv2.rectangle(frame, (0, 0), (width, 66), (8, 15, 30), -1)
+        cv2.putText(
+            frame,
+            self.message,
+            (16, 28),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (0, 255, 180) if self.face_detected else (80, 120, 255),
+            2,
+        )
+        cv2.putText(
+            frame,
+            f"ID: {self.student_id} | {self.progress}%",
+            (16, 54),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            (230, 230, 230),
+            1,
+        )
+        bar_width = int((width - 32) * self.progress / 100)
+        cv2.rectangle(
+            frame, (16, height - 18), (width - 16, height - 8), (45, 55, 70), -1
+        )
+        cv2.rectangle(
+            frame,
+            (16, height - 18),
+            (16 + bar_width, height - 8),
+            (0, 220, 160),
+            -1,
+        )
 
-        if m_eye(lms, h, w):
-            eye_drown = True
+    def status(self) -> dict:
+        step = (
+            "complete"
+            if self.completed
+            else self.steps[min(self.step_index, len(self.steps) - 1)][0]
+        )
+        return {
+            "studentId": self.student_id,
+            "purpose": self.purpose,
+            "running": not self.completed and not self.error,
+            "completed": self.completed,
+            "faceDetected": self.face_detected,
+            "step": step,
+            "progress": self.progress,
+            "message": self.message,
+            "captures": list(self.captures),
+            "error": self.error,
+            "detector": "mediapipe",
+        }
 
-        if lms is not None and eye_drown: 
-            if time_talk is None:
-                time_talk= time.time()
-             # SPACE
+    def get_captures(self) -> dict[str, np.ndarray]:
+        return {key: image.copy() for key, image in self.captures.items()}
 
-            star_talk = time.time()- time_talk
-            bar_w = min(int(star_talk/3.0)*(w-20), w-20)
-            cv2.rectangle(frame, (10, h-25), (10 + bar_w, h-8), (0, 255, 0), -1)
-            cv2.putText(frame, "nham mat de chup ....", 
-                        (10, h-30), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
-            
+    def close(self) -> None:
+        self.detector.close()
 
-        if star_talk >=3 and face_crop is not None:
-            captured[step_key]=face_crop.copy()
-            show= True
-            save_true(face_crop, h, w, person_id)
-            show = False
-            step_idx +=1
-            time_talk= None
-        if step_idx == 3:
-            database.save_face(person_id, 
-                                captured["front"], 
-                                captured["left"], 
-                                captured["right"])
-            break
-                
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
 
-            
-    cap.release()
-    cv2.destroyAllWindows()
+def main() -> None:
+    database.init_database()
+    student_id = input("Nhap ma sinh vien: ").strip()
+    if not database.person_exists(student_id):
+        print("Khong tim thay sinh vien trong database.")
+        return
+
+    scanner = FaceScanner()
+    scanner.reset(student_id, "register")
+    camera = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    if not camera.isOpened():
+        print("Khong mo duoc camera.")
+        scanner.close()
+        return
+
+    try:
+        while not scanner.completed:
+            ok, frame = camera.read()
+            if not ok:
+                break
+            cv2.imshow("SmartFace PDT", scanner.process_frame(frame))
+            if cv2.waitKey(1) & 0xFF == ord("q"):
+                break
+
+        captures = scanner.get_captures()
+        if scanner.completed:
+            database.save_face(
+                student_id,
+                captures["front"],
+                captures["left"],
+                captures["right"],
+            )
+    finally:
+        camera.release()
+        scanner.close()
+        cv2.destroyAllWindows()
+
 
 if __name__ == "__main__":
     main()

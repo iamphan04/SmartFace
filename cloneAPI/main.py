@@ -1,12 +1,19 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+<<<<<<< HEAD
 import sqlite3
 import numpy as np
 from fraud_engine import cosine_similarity
 from pathlib import Path
+=======
+import requests
+from fraud_engine import calculate_fraud_score, get_risk_level, get_confidence
+>>>>>>> f73ef4913553fc54f4f51ec4df51ed6766b9833c
 
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+<<<<<<< HEAD
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -17,117 +24,113 @@ app.add_middleware(
 
 DB_PATH = Path(__file__).with_name("System.db")
 
+=======
+DUY_API = "http://localhost:8000"
+>>>>>>> f73ef4913553fc54f4f51ec4df51ed6766b9833c
 
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
-
-@app.post("/verify-document")
-async def verify_document(data: dict):
+@app.post("/verify")
+async def verify(data: dict):
+    """
+    Request:
+    {
+        "mssv": "2125110264",
+        "name": "Nguyễn Ngô Huy Thịnh",
+        "image": "base64_image"
+    }
+    """
     mssv = data.get("mssv")
     name = data.get("name", "")
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT name FROM persons WHERE id = ?",
-        (mssv,)
-    )
-
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
+    image = data.get("image")
+    
+    if not all([mssv, name, image]):
         return {
             "success": False,
             "decision": "FAIL",
-            "reason": "MSSV not found"
+            "risk_score": 100,
+            "risk_level": "CRITICAL",
+            "face_similarity": 0.0,
+            "confidence": 0.0,
+            "reasons": ["Missing mssv, name, or image"]
         }
-
-    db_name = row[0]
-
-    if db_name.strip().lower() != name.strip().lower():
-        return {
-            "success": False,
-            "decision": "FAIL",
-            "reason": "Name mismatch"
-        }
-
-    return {
-        "success": True,
-        "decision": "PASS"
-    }
-
-
-@app.post("/verify-face")
-async def verify_face(data: dict):
-    mssv = data.get("mssv")
-    embeddings = data.get("embeddings")
-
-    if not embeddings:
-        return {
-            "success": False,
-            "decision": "FAIL",
-            "reason": "No embeddings provided"
-        }
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute(
-        "SELECT face_embedding FROM person_id WHERE person_id = ?",
-        (mssv,)
-    )
-
-    row = cursor.fetchone()
-    conn.close()
-
-    if not row:
-        return {
-            "success": False,
-            "decision": "FAIL",
-            "reason": "MSSV not found"
-        }
-
+    
     try:
-        print("TYPE",type(row[0]))
-        print("LEN:", len(row[0]))
+        user_resp = requests.get(f"{DUY_API}/api/users/{mssv}", timeout=5)
+        if user_resp.status_code != 200:
+            return {
+                "success": False,
+                "decision": "FAIL",
+                "risk_score": 100,
+                "risk_level": "CRITICAL",
+                "face_similarity": 0.0,
+                "confidence": 0.0,
+                "reasons": ["MSSV not found"]
+            }
         
-        if isinstance(row[0], bytes):
-            print("FIRST 100 BYTES:", row[0][:100])
-        else:
-            print("VALUE:", str(row[0])[:300])
-            
-        db_embedding = np.frombuffer(
-            row[0],
-            dtype=np.float32
+        user_data = user_resp.json()
+        db_name = user_data.get("fullName", "")
+        name_match = db_name.strip().lower() == name.strip().lower()
+        
+        face_resp = requests.post(
+            f"{DUY_API}/api/verify-face",
+            json={"studentId": mssv, "image": image},
+            timeout=10
         )
-        scores = []
-
-        for emb in embeddings:
-            emb = np.array(emb, dtype=np.float32)
-
-            score = cosine_similarity(
-                db_embedding,
-                emb
-            )
-
-            scores.append(float(score))
-
-        avg_score = sum(scores) / len(scores)
-
+        
+        if face_resp.status_code != 200:
+            face_data = {"success": False, "confidence": 0.0}
+        else:
+            face_data = face_resp.json()
+        
+        face_success = face_data.get("success", False)
+        face_confidence = face_data.get("confidence", 0.0) / 100.0  # Convert 0-100 to 0-1
+        
+        fraud_score, reasons = calculate_fraud_score(
+            face_sim=face_confidence,
+            name_match=name_match
+        )
+        risk_level, decision = get_risk_level(fraud_score)
+        
         return {
-            "success": True,
-            "decision": "PASS" if avg_score >= 0.7 else "FAIL",
-            "avg_score": avg_score,
-            "all_scores": scores
+            "success": decision == "PASS",
+            "decision": decision,
+            "risk_score": fraud_score,
+            "risk_level": risk_level,
+            "face_similarity": round(face_confidence, 4),
+            "confidence": get_confidence(face_confidence),
+            "reasons": reasons
         }
-
+    
+    except requests.exceptions.RequestException as e:
+        return {
+            "success": False,
+            "decision": "FAIL",
+            "risk_score": 100,
+            "risk_level": "CRITICAL",
+            "face_similarity": 0.0,
+            "confidence": 0.0,
+            "reasons": [f"Connection error: {str(e)}"]
+        }
+    
     except Exception as e:
         return {
             "success": False,
             "decision": "FAIL",
-            "reason": str(e)
+            "risk_score": 100,
+            "risk_level": "CRITICAL",
+            "face_similarity": 0.0,
+            "confidence": 0.0,
+            "reasons": [str(e)]
         }
+
+@app.post("/register")
+async def register(data: dict):
+    """Forward register request to Duy's API"""
+    try:
+        resp = requests.post(f"{DUY_API}/api/register", json=data, timeout=10)
+        return resp.json()
+    except Exception as e:
+        return {"success": False, "message": str(e)}
