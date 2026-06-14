@@ -21,22 +21,31 @@ class QRScanner:
     def process_frame(self, frame: np.ndarray) -> np.ndarray:
         display = frame.copy()
         value = ""
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        kernel = np.array([[0, -1, 0], [-1, 5, -1], [0, -1, 0]])
+        sharpened = cv2.filter2D(enhanced, -1, kernel)
+        _, thresh = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-        try:
-            results = pyzbar.decode(frame)
-            if results:
-                result = results[0]
-                value = result.data.decode("utf-8").strip()
-                rect = result.rect
-                cv2.rectangle(
-                    display,
-                    (rect.left, rect.top),
-                    (rect.left + rect.width, rect.top + rect.height),
-                    (0, 255, 120),
-                    3,
-                )
-        except Exception as exc:
-            self.error = str(exc)
+        # Thử pyzbar với từng phiên bản
+        for img in [frame, gray, enhanced, sharpened, thresh]:
+
+            try:
+                results = pyzbar.decode(frame)
+                if results:
+                    result = results[0]
+                    value = result.data.decode("utf-8").strip()
+                    rect = result.rect
+                    cv2.rectangle(
+                        display,
+                        (rect.left, rect.top),
+                        (rect.left + rect.width, rect.top + rect.height),
+                        (0, 255, 120),
+                        3,
+                    )
+            except Exception as exc:
+                self.error = str(exc)
 
         if not value:
             try:
