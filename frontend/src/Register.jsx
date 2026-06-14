@@ -29,6 +29,7 @@ const Register = () => {
   });
 
   const pollRef = useRef(null);
+  const [cameraSession, setCameraSession] = useState(null);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -61,6 +62,7 @@ const Register = () => {
       clearInterval(pollRef.current);
       pollRef.current = null;
     }
+    setCameraSession(null);
     try {
       await fetch('/api/camera/stop', { method: 'POST' });
     } catch (error) {
@@ -80,13 +82,22 @@ const Register = () => {
         `/api/face/start/${encodeURIComponent(form.studentId)}?purpose=register`,
         { method: 'POST' }
       );
-      if (!response.ok) throw new Error(await response.text());
+      const started = await response.json();
+      if (!response.ok) throw new Error(started.detail || 'Không thể mở camera');
+      const sessionId = started.sessionId;
+      setCameraSession(sessionId);
 
       pollRef.current = setInterval(async () => {
         try {
           const statusResponse = await fetch('/api/face/status');
           const result = await statusResponse.json();
           if (!statusResponse.ok) throw new Error(result.detail || 'Lỗi face scanner');
+          if (
+            result.sessionId !== sessionId ||
+            result.mode !== 'face_register'
+          ) {
+            throw new Error('Phiên camera đăng ký đã thay đổi.');
+          }
 
           setRate(result.progress || 0);
           setStatus(result.message || 'Đang quét khuôn mặt...');
@@ -335,11 +346,17 @@ const Register = () => {
                 
                 <div className={`video-frame ${scanning ? 'active-scan' : ''}`} style={{ marginBottom: '24px', position: 'relative', overflow: 'hidden', height: '360px', background: '#000' }}>
                   
-                  <img
-                    src="/api/camera/stream"
-                    alt="Camera SmartFace FastAPI"
-                    style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                  />
+                  {cameraSession !== null ? (
+                    <img
+                      src={`/api/camera/stream?session=${cameraSession}`}
+                      alt="Camera SmartFace FastAPI"
+                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+                    />
+                  ) : (
+                    <div className="video-placeholder">
+                      <p>Nhấn bắt đầu để mở camera khuôn mặt</p>
+                    </div>
+                  )}
 
                   {scanning && (
                     <>

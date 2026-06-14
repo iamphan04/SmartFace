@@ -79,7 +79,7 @@ class FaceScanner:
             x1, y1, x2, y2 = get_face_bbox(landmarks, width, height)
             face_crop = display[y1:y2, x1:x2].copy()
             cv2.rectangle(display, (x1, y1), (x2, y2), (0, 255, 120), 2)
-            for point in landmarks[::8]:
+            for point in landmarks:
                 cv2.circle(
                     display,
                     (int(point.x * width), int(point.y * height)),
