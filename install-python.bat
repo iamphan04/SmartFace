@@ -2,32 +2,50 @@
 setlocal
 cd /d "%~dp0"
 
-set "BASE_PYTHON=%LOCALAPPDATA%\Programs\Python\Python312\python.exe"
-set "VENV=%~dp0.venv-smartface312"
+set "BASE_PYTHON=%~dp0.python\python.exe"
+set "VENV=%~dp0.venv-smartface-new"
+set "INSTALLER="
 
 if not exist "%BASE_PYTHON%" (
-    echo Khong tim thay CPython 3.12:
-    echo %BASE_PYTHON%
-    echo Cai Python 3.12 x64 tu python.org truoc.
-    pause
-    exit /b 1
+    for %%I in ("%~dp0python-*-amd64.exe") do if exist "%%~fI" set "INSTALLER=%%~fI"
+    if not defined INSTALLER (
+        for %%I in ("D:\cuasu\python-*-amd64.exe") do if exist "%%~fI" set "INSTALLER=%%~fI"
+    )
+
+    if not defined INSTALLER (
+        echo KHONG TIM THAY BO CAI PYTHON.
+        echo Dat file python-*-amd64.exe canh install-python.bat.
+        if /i not "%~1"=="/auto" pause
+        exit /b 1
+    )
+
+    echo Dang cai Python local...
+    "%INSTALLER%" /quiet InstallAllUsers=0 PrependPath=0 Include_test=0 Include_launcher=0 TargetDir="%~dp0.python"
+    if not exist "%BASE_PYTHON%" (
+        "%INSTALLER%" /repair /quiet
+    )
+    if not exist "%BASE_PYTHON%" (
+        echo Cai Python that bai.
+        if /i not "%~1"=="/auto" pause
+        exit /b 1
+    )
 )
 
-if not exist "%VENV%\Scripts\python.exe" (
-    echo Dang tao virtual environment...
-    "%BASE_PYTHON%" -m venv "%VENV%"
-    if errorlevel 1 exit /b 1
+set "REBUILD_VENV=0"
+if not exist "%VENV%\Scripts\python.exe" set "REBUILD_VENV=1"
+if exist "%VENV%\Scripts\python.exe" (
+    "%VENV%\Scripts\python.exe" --version >nul 2>&1
+    if errorlevel 1 set "REBUILD_VENV=1"
 )
 
-echo Dang cap nhat pip...
-"%VENV%\Scripts\python.exe" -m pip install --upgrade pip
-if errorlevel 1 exit /b 1
+if "%REBUILD_VENV%"=="1" (
+    echo Dang tao moi truong Python...
+    "%BASE_PYTHON%" -m venv --clear "%VENV%"
+    if errorlevel 1 (
+        if /i not "%~1"=="/auto" pause
+        exit /b 1
+    )
+)
 
-echo Dang cai thu vien SmartFace...
-"%VENV%\Scripts\python.exe" -m pip install -r database_pdt\requirements.txt
-if errorlevel 1 exit /b 1
-
-echo.
-echo Cai dat hoan tat.
-"%VENV%\Scripts\python.exe" -c "import cv2, mediapipe, pyzbar, fastapi, uvicorn; print('SmartFace dependencies OK')"
-pause
+echo Moi truong Python da san sang.
+if /i not "%~1"=="/auto" pause

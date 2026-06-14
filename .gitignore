@@ -3,4 +3,9 @@
 __pycache__/
 *.py[cod]
 .cache/
+.pip-cache/
+.python/
+.smartface/
+frontend/.npm-cache/
+*.log
 database_pdt/System.backup-*.db

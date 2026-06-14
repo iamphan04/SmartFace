@@ -5,9 +5,6 @@ from typing import Optional
 import cv2
 import numpy as np
 
-from pdt_QR import QRScanner
-from pdt_face import FaceScanner
-
 
 class CameraManager:
     """Own the physical webcam and expose processed frames to FastAPI."""
@@ -121,6 +118,8 @@ class CameraManager:
                 self.last_frame_at = time.time()
 
     def start_face(self, student_id: str, purpose: str) -> bool:
+        from pdt_face import FaceScanner
+
         scanner = FaceScanner()
         scanner.reset(student_id, purpose)
         with self.process_lock:
@@ -136,6 +135,8 @@ class CameraManager:
         return self.start()
 
     def start_qr(self) -> bool:
+        from pdt_QR import QRScanner
+
         scanner = QRScanner()
         with self.process_lock:
             with self.lock:
@@ -183,14 +184,16 @@ class CameraManager:
 
     def face_captures(self) -> dict[str, np.ndarray]:
         with self.lock:
-            if isinstance(self.processor, FaceScanner):
-                return self.processor.get_captures()
+            if self.mode.startswith("face_"):
+                get_captures = getattr(self.processor, "get_captures", None)
+                if callable(get_captures):
+                    return get_captures()
         return {}
 
     def qr_value(self) -> str:
         with self.lock:
-            if isinstance(self.processor, QRScanner):
-                return self.processor.value
+            if self.mode == "qr":
+                return getattr(self.processor, "value", "")
         return ""
 
     def jpeg_frame(self) -> Optional[bytes]:

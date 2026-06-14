@@ -2,7 +2,7 @@ import base64
 import os
 import sqlite3
 import sys
-from contextlib import closing
+from contextlib import asynccontextmanager, closing
 from pathlib import Path
 from typing import Optional
 
@@ -55,7 +55,17 @@ class VerifyDocumentData(BaseModel):
     name: str = ""
 
 
-app = FastAPI(title="SmartFace API", version="1.0.0")
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    init_database()
+    try:
+        yield
+    finally:
+        camera_manager.stop()
+
+
+app = FastAPI(title="SmartFace API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
@@ -230,16 +240,6 @@ def user_query() -> str:
         FROM profiles p
         LEFT JOIN processed_faces pf ON pf.student_id = p.student_id
     """
-
-
-@app.on_event("startup")
-def startup() -> None:
-    init_database()
-
-
-@app.on_event("shutdown")
-def shutdown() -> None:
-    camera_manager.stop()
 
 
 @app.get("/health")
