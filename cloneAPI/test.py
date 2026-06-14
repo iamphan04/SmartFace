@@ -1,91 +1,69 @@
 import requests
 import json
-from mock_embedding import test_cases
 
-BASE_URL = "http://127.0.0.1:8000"
+BASE_URL = "http://127.0.0.1:8001"
 
 print("=" * 50)
-print("Testing SmartFace API")
+print("Testing SmartFace Fraud Engine API")
 print("=" * 50)
-
-# HEALTH
 print("\n1. HEALTH")
-
 try:
     r = requests.get(f"{BASE_URL}/health")
-    print(r.status_code)
-    print(r.text)
+    print(f"Status: {r.status_code}")
+    print(json.dumps(r.json(), indent=2))
 except Exception as e:
-    print(e)
+    print(f"Error: {e}")
 
-# DOCUMENT
-print("\n2. VERIFY DOCUMENT")
-
+print("\n2. VERIFY - PASS (Valid MSSV, Name Match)")
 try:
     payload = {
         "mssv": "2125110264",
-        "name": "Nguyễn Ngô Huy Thịnh"
+        "name": "Nguyễn Ngô Huy Thịnh",
+        "image": "fake_base64_image_data"
     }
-
-    r = requests.post(
-        f"{BASE_URL}/verify-document",
-        json=payload
-    )
-
-    print(r.status_code)
-    print(r.text)
-
+    r = requests.post(f"{BASE_URL}/verify", json=payload)
+    print(f"Status: {r.status_code}")
+    print(json.dumps(r.json(), indent=2))
 except Exception as e:
-    print(e)
+    print(f"Error: {e}")
 
-# SAFE
-print("\n3. VERIFY FACE SAFE")
-
+print("\n3. VERIFY - FAIL (Name Mismatch)")
 try:
-    r = requests.post(
-        f"{BASE_URL}/verify-face",
-        json=test_cases["safe"]
-    )
-
-    print(r.status_code)
-    print(r.text)
-
+    payload = {
+        "mssv": "2125110264",
+        "name": "Tên Sai",
+        "image": "fake_base64_image_data"
+    }
+    r = requests.post(f"{BASE_URL}/verify", json=payload)
+    print(f"Status: {r.status_code}")
+    print(json.dumps(r.json(), indent=2))
 except Exception as e:
-    print(e)
+    print(f"Error: {e}")
 
-# FRAUD
-print("\n4. VERIFY FACE FRAUD")
-
-try:
-    r = requests.post(
-        f"{BASE_URL}/verify-face",
-        json=test_cases["fraud"]
-    )
-
-    print(r.status_code)
-    print(r.text)
-
-except Exception as e:
-    print(e)
-
-# NOT FOUND
-print("\n5. VERIFY FACE NOT FOUND")
-
+print("\n4. VERIFY - NOT FOUND (Invalid MSSV)")
 try:
     payload = {
         "mssv": "9999999999",
-        "embeddings": test_cases["safe"]["embeddings"]
+        "name": "Test",
+        "image": "fake_base64_image_data"
     }
-
-    r = requests.post(
-        f"{BASE_URL}/verify-face",
-        json=payload
-    )
-
-    print(r.status_code)
-    print(r.text)
-
+    r = requests.post(f"{BASE_URL}/verify", json=payload)
+    print(f"Status: {r.status_code}")
+    print(json.dumps(r.json(), indent=2))
 except Exception as e:
-    print(e)
+    print(f"Error: {e}")
 
-print("\nDONE")
+print("\n5. VERIFY - MISSING DATA")
+try:
+    payload = {
+        "mssv": "2125110264"
+    }
+    r = requests.post(f"{BASE_URL}/verify", json=payload)
+    print(f"Status: {r.status_code}")
+    print(json.dumps(r.json(), indent=2))
+except Exception as e:
+    print(f"Error: {e}")
+
+print("\n" + "=" * 50)
+print("DONE")
+print("=" * 50)
