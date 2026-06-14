@@ -15,7 +15,7 @@ const Dashboard = () => {
   const [confidence, setConfidence] = useState(0); 
   const [mode, setMode] = useState('face');
   const [logs, setLogs] = useState([]);
-  const [streamNonce, setStreamNonce] = useState(0);
+  const [streamSession, setStreamSession] = useState(null);
   const [showAuthWarning, setShowAuthWarning] = useState(false);
 
   const playBeep = (freq, type, duration) => {
@@ -59,18 +59,6 @@ const Dashboard = () => {
         }
       }
 
-      if (!usersList || usersList.length === 0) {
-        usersList = [
-          {
-            studentId: '2125110200',
-            fullName: 'Sinh Viên Test',
-            faculty: 'Khoa Công nghệ thông tin',
-            dob: '2004-10-15',
-            email: 'test@student.edu.vn'
-          }
-        ];
-      }
-
       setUsers(usersList);
       
       if (usersList.length > 0) {
@@ -104,23 +92,28 @@ const Dashboard = () => {
     setPct(0);
     setOk(false);
     setErrorMatch(false);
-    setStreamNonce(Date.now());
+    setStreamSession(null);
+    const scanMode = mode;
     
-    if (mode === 'document') {
+    if (scanMode === 'qr') {
       setLogs(['[HỆ THỐNG QR] Đang khởi động pdt_QR.py trên FastAPI...']);
     }
     
-    setMsg(mode === 'face' ? 'Đang khởi động pdt_face.py...' : 'Đang khởi động pdt_QR.py...');
+    setMsg(scanMode === 'face' ? 'Đang khởi động pdt_face.py...' : 'Đang khởi động pdt_QR.py...');
     playBeep(440, 'sine', 0.1);
 
     try {
-      const startUrl = mode === 'face'
+      const startUrl = scanMode === 'face'
         ? `/api/face/start/${encodeURIComponent(user.studentId)}?purpose=verify`
         : '/api/qr/start';
       const startResponse = await fetch(startUrl, { method: 'POST' });
-      if (!startResponse.ok) throw new Error(await startResponse.text());
+      const started = await startResponse.json();
+      if (!startResponse.ok) throw new Error(started.detail || 'Không thể mở camera');
+      const sessionId = started.sessionId;
+      const expectedMode = scanMode === 'face' ? 'face_verify' : 'qr';
+      setStreamSession(sessionId);
 
-      const statusUrl = mode === 'face' ? '/api/face/status' : '/api/qr/status';
+      const statusUrl = scanMode === 'face' ? '/api/face/status' : '/api/qr/status';
       const startedAt = Date.now();
       let scannerStatus = null;
 
@@ -131,10 +124,16 @@ const Dashboard = () => {
         if (!statusResponse.ok) {
           throw new Error(scannerStatus.detail || 'Không đọc được trạng thái camera');
         }
+        if (
+          scannerStatus.sessionId !== sessionId ||
+          scannerStatus.mode !== expectedMode
+        ) {
+          throw new Error('Phiên camera đã chuyển sang chế độ khác.');
+        }
 
-        const progress = mode === 'face'
+        const progress = scanMode === 'face'
           ? (scannerStatus.progress || 0)
-          : Math.min(95, Math.round((Date.now() - startedAt) / 300));
+          : Math.min(95, Math.round((Date.now() - startedAt) / 250));
         setPct(progress);
         setMsg(scannerStatus.message || 'Đang xử lý camera...');
         if (scannerStatus.completed) break;
@@ -144,7 +143,7 @@ const Dashboard = () => {
         throw new Error('Hết thời gian chờ camera. Vui lòng thử lại.');
       }
 
-      const verifyUrl = mode === 'face'
+      const verifyUrl = scanMode === 'face'
         ? `/api/face/verify/${encodeURIComponent(user.studentId)}`
         : `/api/qr/verify/${encodeURIComponent(user.studentId)}`;
       const verifyResponse = await fetch(verifyUrl, { method: 'POST' });
@@ -154,7 +153,7 @@ const Dashboard = () => {
       setPct(100);
       setOk(success);
       setErrorMatch(!success);
-      if (mode === 'face') {
+      if (scanMode === 'face') {
         setConfidence(result.confidence || 0);
         setMsg(success
           ? `Xác thực thành công! Xin chào ${user.fullName}`
@@ -183,6 +182,7 @@ const Dashboard = () => {
       playBeep(220, 'sawtooth', 0.4);
     } finally {
       setActive(false);
+      setStreamSession(null);
       fetch('/api/camera/stop', { method: 'POST' }).catch(() => {});
     }
   };
@@ -204,10 +204,10 @@ const Dashboard = () => {
         <div className="db-container main-grid">
           <div className="video-column">
             <div className={`video-frame ${active ? 'active-scan' : ''}`} style={{ position: 'relative' }}>
-              {active && (
+              {active && streamSession !== null && (
                 <img
                   id="backend-video"
-                  src={`/api/camera/stream?v=${streamNonce}`}
+                  src={`/api/camera/stream?session=${streamSession}`}
                   alt="Camera SmartFace FastAPI"
                   style={{
                     position: 'absolute',
@@ -248,7 +248,7 @@ const Dashboard = () => {
                 </>
               )}
 
-              {mode === 'document' && (
+              {mode === 'qr' && (
                 <>
                   <div className="id-card-guide-box">
                     <div className="id-card-corner corner-tl"></div>
@@ -269,7 +269,7 @@ const Dashboard = () => {
                   <path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/>
                 </svg>
                 <p>
-                  {mode === 'face' ? 'Luồng xử lý Camera Sinh trắc' : 'Luồng quét Thẻ Cận Cảnh'}
+                  {mode === 'face' ? 'Luồng xử lý Camera Sinh trắc' : 'Luồng quét Mã QR'}
                 </p>
                 <span className="stream-status">
                   {active 
@@ -302,11 +302,13 @@ const Dashboard = () => {
                   <button 
                     type="button"
                     className={`verify-tab-btn ${mode === 'face' ? 'active' : ''}`}
+                    disabled={active}
                     onClick={() => {
                       setMode('face');
                       setOk(false);
                       setErrorMatch(false);
                       setPct(0);
+                      setLogs([]);
                       setMsg('Sẵn sàng xác thực');
                       playBeep(600, 'sine', 0.08);
                     }}
@@ -318,13 +320,15 @@ const Dashboard = () => {
                   </button>
                   <button 
                     type="button"
-                    className={`verify-tab-btn ${mode === 'document' ? 'active' : ''}`}
+                    className={`verify-tab-btn ${mode === 'qr' ? 'active' : ''}`}
+                    disabled={active}
                     onClick={() => {
-                      setMode('document');
+                      setMode('qr');
                       setOk(false);
                       setErrorMatch(false);
                       setPct(0);
-                      setMsg('Sẵn sàng quét giấy tờ');
+                      setLogs([]);
+                      setMsg('Sẵn sàng quét QR');
                       playBeep(600, 'sine', 0.08);
                     }}
                   >
@@ -362,6 +366,7 @@ const Dashboard = () => {
                   <select
                     id="select-match-student"
                     value={index}
+                    disabled={active}
                     onChange={(e) => {
                       const idx = parseInt(e.target.value);
                       setIndex(idx);
@@ -414,7 +419,7 @@ const Dashboard = () => {
                 </div>
               )}
 
-              {active && mode === 'document' && (
+              {active && mode === 'qr' && (
                 <div className="ocr-terminal">
                   {logs.map((log, idx) => {
                     let logClass = 'info';
@@ -472,7 +477,9 @@ const Dashboard = () => {
                     XÁC THỰC THẤT BẠI ❌
                   </h4>
                   <p style={{ fontSize: '14px', color: '#cbd5e1', marginBottom: '16px' }}>
-                    Khuôn mặt hiện tại không khớp với hồ sơ sinh viên <strong>{user?.fullName}</strong> ({user?.studentId}).
+                    {mode === 'face'
+                      ? <>Khuôn mặt hiện tại không khớp với hồ sơ sinh viên <strong>{user?.fullName}</strong> ({user?.studentId}).</>
+                      : <>Mã QR vừa quét không trùng với MSSV <strong>{user?.studentId}</strong> của hồ sơ đã chọn.</>}
                   </p>
                   <button
                     onClick={() => { setOk(false); setErrorMatch(false); setPct(0); }}
@@ -487,7 +494,7 @@ const Dashboard = () => {
                 </div>
               )}
 
-              {!active && ok && mode === 'document' && (
+              {!active && ok && mode === 'qr' && (
                 <div className="document-matched-display">
                   <div className="ocr-details-grid">
                     <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
@@ -535,9 +542,9 @@ const Dashboard = () => {
                         </div>
                       </div>
                       <div>
-                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>ĐỘ CHÍNH XÁC KHỚP</div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8' }}>TRẠNG THÁI QR</div>
                         <div style={{ fontSize: '12px', fontWeight: 'bold', color: '#4ade80' }}>
-                          98.7% (ĐỒNG NHẤT KHÍT)
+                          ĐÃ ĐỐI CHIẾU ĐÚNG MSSV
                         </div>
                       </div>
                     </div>

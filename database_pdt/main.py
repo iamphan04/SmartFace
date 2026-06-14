@@ -292,11 +292,14 @@ def camera_status() -> dict:
 
 
 @app.get("/api/camera/stream")
-def camera_stream():
+def camera_stream(session: Optional[int] = None):
+    status = camera_manager.status()
+    if session is not None and status["sessionId"] != session:
+        raise HTTPException(status_code=409, detail="Camera session da thay doi.")
     if not camera_manager.start():
         raise HTTPException(status_code=503, detail=camera_manager.status()["error"])
     return StreamingResponse(
-        camera_manager.stream(),
+        camera_manager.stream(session),
         media_type="multipart/x-mixed-replace; boundary=frame",
         headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
     )

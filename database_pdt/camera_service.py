@@ -15,12 +15,15 @@ class CameraManager:
     def __init__(self, camera_index: int = 0):
         self.camera_index = camera_index
         self.lock = threading.RLock()
+        self.process_lock = threading.Lock()
         self.camera = None
         self.thread = None
         self.stop_event = threading.Event()
         self.mode = "idle"
+        self.session_id = 0
         self.processor = None
         self.latest_frame: Optional[np.ndarray] = None
+        self.latest_jpeg: Optional[bytes] = None
         self.last_frame_at = 0.0
         self.error = ""
 
@@ -31,8 +34,10 @@ class CameraManager:
         if not camera.isOpened():
             camera.release()
             camera = cv2.VideoCapture(self.camera_index)
-        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        camera.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        camera.set(cv2.CAP_PROP_FPS, 30)
+        camera.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         if not camera.isOpened():
             camera.release()
             self.error = f"Khong mo duoc camera index {self.camera_index}"
@@ -61,16 +66,19 @@ class CameraManager:
         thread = self.thread
         if thread is not None and thread.is_alive():
             thread.join(timeout=2)
-        with self.lock:
-            self._close_processor()
-            if self.camera is not None:
-                self.camera.release()
-            self.camera = None
-            self.thread = None
-            self.latest_frame = None
-            self.last_frame_at = 0.0
-            self.mode = "idle"
-            self.processor = None
+        with self.process_lock:
+            with self.lock:
+                self._close_processor()
+                if self.camera is not None:
+                    self.camera.release()
+                self.camera = None
+                self.thread = None
+                self.latest_frame = None
+                self.latest_jpeg = None
+                self.last_frame_at = 0.0
+                self.mode = "idle"
+                self.processor = None
+                self.session_id += 1
 
     def _close_processor(self) -> None:
         close = getattr(self.processor, "close", None)
@@ -81,7 +89,6 @@ class CameraManager:
         while not self.stop_event.is_set():
             with self.lock:
                 camera = self.camera
-                processor = self.processor
             if camera is None:
                 break
 
@@ -92,37 +99,66 @@ class CameraManager:
                 continue
 
             try:
-                display = processor.process_frame(frame) if processor else frame
+                with self.process_lock:
+                    with self.lock:
+                        processor = self.processor
+                        processed_session = self.session_id
+                    display = processor.process_frame(frame) if processor else frame
             except Exception as exc:
-                self.error = f"Loi xu ly camera: {exc}"
+                with self.lock:
+                    if self.session_id == processed_session:
+                        self.error = f"Loi xu ly camera: {exc}"
                 display = frame
 
+            encoded_ok, encoded = cv2.imencode(
+                ".jpg", display, [cv2.IMWRITE_JPEG_QUALITY, 76]
+            )
             with self.lock:
+                if self.session_id != processed_session:
+                    continue
                 self.latest_frame = display
+                self.latest_jpeg = encoded.tobytes() if encoded_ok else None
                 self.last_frame_at = time.time()
-            time.sleep(0.01)
 
     def start_face(self, student_id: str, purpose: str) -> bool:
         scanner = FaceScanner()
         scanner.reset(student_id, purpose)
-        with self.lock:
-            self._close_processor()
-            self.processor = scanner
-            self.mode = f"face_{purpose}"
+        with self.process_lock:
+            with self.lock:
+                self._close_processor()
+                self.processor = scanner
+                self.mode = f"face_{purpose}"
+                self.session_id += 1
+                self.latest_frame = None
+                self.latest_jpeg = None
+                self.last_frame_at = 0.0
+                self.error = ""
         return self.start()
 
     def start_qr(self) -> bool:
-        with self.lock:
-            self._close_processor()
-            self.processor = QRScanner()
-            self.mode = "qr"
+        scanner = QRScanner()
+        with self.process_lock:
+            with self.lock:
+                self._close_processor()
+                self.processor = scanner
+                self.mode = "qr"
+                self.session_id += 1
+                self.latest_frame = None
+                self.latest_jpeg = None
+                self.last_frame_at = 0.0
+                self.error = ""
         return self.start()
 
     def set_idle(self) -> None:
-        with self.lock:
-            self._close_processor()
-            self.processor = None
-            self.mode = "idle"
+        with self.process_lock:
+            with self.lock:
+                self._close_processor()
+                self.processor = None
+                self.mode = "idle"
+                self.session_id += 1
+                self.latest_frame = None
+                self.latest_jpeg = None
+                self.last_frame_at = 0.0
 
     def status(self) -> dict:
         with self.lock:
@@ -138,6 +174,7 @@ class CameraManager:
                 "opened": bool(self.camera is not None and self.camera.isOpened()),
                 "cameraIndex": self.camera_index,
                 "mode": self.mode,
+                "sessionId": self.session_id,
                 "frameReady": self.latest_frame is not None,
                 "frameAgeSeconds": frame_age,
                 "error": self.error,
@@ -158,17 +195,18 @@ class CameraManager:
 
     def jpeg_frame(self) -> Optional[bytes]:
         with self.lock:
-            frame = self.latest_frame.copy() if self.latest_frame is not None else None
-        if frame is None:
-            return None
-        ok, encoded = cv2.imencode(
-            ".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 82]
-        )
-        return encoded.tobytes() if ok else None
+            return self.latest_jpeg
 
-    def stream(self):
+    def stream(self, session_id: Optional[int] = None):
         while True:
-            frame = self.jpeg_frame()
+            with self.lock:
+                running = self.thread is not None and self.thread.is_alive()
+                current_session = self.session_id
+                frame = self.latest_jpeg
+            if not running or (
+                session_id is not None and current_session != session_id
+            ):
+                break
             if frame is not None:
                 yield (
                     b"--frame\r\n"
@@ -176,4 +214,4 @@ class CameraManager:
                     + frame
                     + b"\r\n"
                 )
-            time.sleep(0.04)
+            time.sleep(0.05)
