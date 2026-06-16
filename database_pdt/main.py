@@ -42,6 +42,10 @@ class RegisterData(BaseModel):
     face_front_b64: Optional[str] = None
     face_left_b64: Optional[str] = None
     face_right_b64: Optional[str] = None
+    card_front_b64: Optional[str] = None
+    card_back_b64: Optional[str] = None
+    frontCard: Optional[str] = None
+    backCard: Optional[str] = None
 
 
 class VerifyFaceData(BaseModel):
@@ -84,6 +88,110 @@ def connect_db() -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     return conn
+
+
+def sql_name(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({sql_name(table)})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def unique_legacy_table(conn: sqlite3.Connection, base_name: str) -> str:
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if base_name not in existing:
+        return base_name
+    index = 1
+    while f"{base_name}_{index}" in existing:
+        index += 1
+    return f"{base_name}_{index}"
+
+
+def create_face_images_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS face_images (
+            student_id TEXT PRIMARY KEY,
+            front_image BLOB NOT NULL,
+            left_image BLOB NOT NULL,
+            right_image BLOB NOT NULL,
+            source TEXT NOT NULL DEFAULT 'frontend',
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def ensure_face_images_schema(conn: sqlite3.Connection) -> None:
+    columns = table_columns(conn, "face_images")
+    required = {"student_id", "front_image", "left_image", "right_image"}
+    if not columns or required.issubset(columns):
+        return
+
+    legacy_table = unique_legacy_table(conn, "face_images_legacy")
+    conn.execute(
+        f"ALTER TABLE {sql_name('face_images')} RENAME TO {sql_name(legacy_table)}"
+    )
+    create_face_images_table(conn)
+
+    if {"person_id", "face_data"}.issubset(columns):
+        legacy = sql_name(legacy_table)
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO profiles(student_id, full_name)
+            SELECT UPPER(TRIM(person_id)), UPPER(TRIM(person_id))
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO face_images(
+                student_id, front_image, left_image, right_image,
+                source, updated_at, created_at
+            )
+            SELECT
+                UPPER(TRIM(person_id)),
+                face_data,
+                COALESCE(face_data_left, face_data),
+                COALESCE(face_data_right, face_data),
+                'legacy',
+                COALESCE(updated_at, datetime('now', 'localtime')),
+                COALESCE(created_at, datetime('now', 'localtime'))
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+              AND face_data IS NOT NULL
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO processed_faces(
+                student_id, front_processed, left_processed, right_processed,
+                processing_status
+            )
+            SELECT
+                UPPER(TRIM(person_id)),
+                face_data,
+                COALESCE(face_data_left, face_data),
+                COALESCE(face_data_right, face_data),
+                'legacy'
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+              AND face_data IS NOT NULL
+            """
+        )
 
 
 def init_database() -> None:
@@ -135,8 +243,20 @@ def init_database() -> None:
                 checked_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS card_images (
+                student_id TEXT PRIMARY KEY,
+                front_card BLOB,
+                back_card BLOB,
+                front_fingerprint BLOB,
+                back_fingerprint BLOB,
+                updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+                created_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+            );
             """
         )
+        ensure_face_images_schema(conn)
         conn.commit()
 
 def decode_image(value: str) -> np.ndarray:
@@ -212,12 +332,85 @@ def compare_faces(registered: np.ndarray, captured: np.ndarray) -> float:
 
     left_hist = cv2.calcHist([left], [0], None, [64], [0, 256])
     right_hist = cv2.calcHist([right], [0], None, [64], [0, 256])
+    cv2.normalize(left_hist, left_hist)
+    cv2.normalize(right_hist, right_hist)
     histogram = float(cv2.compareHist(left_hist, right_hist, cv2.HISTCMP_CORREL))
 
+    left_edges = cv2.Canny(left, 60, 150)
+    right_edges = cv2.Canny(right, 60, 150)
+    edge_overlap = float(
+        np.count_nonzero(cv2.bitwise_and(left_edges, right_edges))
+        / (np.count_nonzero(cv2.bitwise_or(left_edges, right_edges)) + 1e-8)
+    )
+    pixel_similarity = 1.0 - float(cv2.absdiff(left, right).mean() / 255.0)
+
+    composite = (
+        0.50 * max(0.0, correlation)
+        + 0.25 * max(0.0, histogram)
+        + 0.15 * max(0.0, edge_overlap)
+        + 0.10 * max(0.0, pixel_similarity)
+    )
     return max(
         0.0,
-        min(1.0, 0.75 * max(0.0, correlation) + 0.25 * max(0.0, histogram)),
+        min(1.0, composite),
     )
+
+
+def save_card_images(
+    conn: sqlite3.Connection,
+    student_id: str,
+    front_card: Optional[np.ndarray],
+    back_card: Optional[np.ndarray],
+) -> None:
+    if front_card is None and back_card is None:
+        return
+
+    from pdt_QR import card_fingerprint, pack_fingerprint
+
+    front_blob = encode_jpeg(front_card) if front_card is not None else None
+    back_blob = encode_jpeg(back_card) if back_card is not None else None
+    front_fp = (
+        pack_fingerprint(card_fingerprint(front_card))
+        if front_card is not None
+        else None
+    )
+    back_fp = (
+        pack_fingerprint(card_fingerprint(back_card))
+        if back_card is not None
+        else None
+    )
+    conn.execute(
+        """
+        INSERT INTO card_images(
+            student_id, front_card, back_card, front_fingerprint, back_fingerprint
+        )
+        VALUES(?, ?, ?, ?, ?)
+        ON CONFLICT(student_id) DO UPDATE SET
+            front_card = COALESCE(excluded.front_card, card_images.front_card),
+            back_card = COALESCE(excluded.back_card, card_images.back_card),
+            front_fingerprint = COALESCE(excluded.front_fingerprint, card_images.front_fingerprint),
+            back_fingerprint = COALESCE(excluded.back_fingerprint, card_images.back_fingerprint),
+            updated_at = datetime('now', 'localtime')
+        """,
+        (student_id, front_blob, back_blob, front_fp, back_fp),
+    )
+
+
+def load_card_fingerprints(student_id: str) -> list[np.ndarray]:
+    from pdt_QR import unpack_fingerprint
+
+    with closing(connect_db()) as conn:
+        row = conn.execute(
+            """
+            SELECT front_fingerprint, back_fingerprint
+            FROM card_images WHERE student_id = ?
+            """,
+            (student_id,),
+        ).fetchone()
+    if not row:
+        return []
+    vectors = [unpack_fingerprint(blob) for blob in row if blob]
+    return [vector for vector in vectors if vector is not None]
 
 
 def user_payload(row: sqlite3.Row) -> dict:
@@ -351,14 +544,53 @@ def stop_qr_scan() -> dict:
 
 @app.post("/api/qr/verify/{student_id}")
 def verify_qr(student_id: str) -> dict:
-    value = camera_manager.qr_value().strip()
     expected = student_id.strip().upper()
-    success = bool(value) and value.upper() == expected
+    scan = camera_manager.qr_scan()
+    value = (scan.get("value") or camera_manager.qr_value()).strip()
+
+    from pdt_QR import compare_fingerprints, extract_student_id
+
+    qr_student_id = extract_student_id(value, expected) if value else ""
+    qr_success = bool(value) and qr_student_id == expected
+
+    card_similarity = 0.0
+    card_success = False
+    card_fingerprint = scan.get("cardFingerprint")
+    reference_fingerprints = load_card_fingerprints(expected)
+    if card_fingerprint is not None and reference_fingerprints:
+        card_similarity = max(
+            compare_fingerprints(card_fingerprint, reference)
+            for reference in reference_fingerprints
+        )
+        card_success = card_similarity >= 0.78
+
+    if reference_fingerprints:
+        success = card_success and (not value or qr_success)
+        match_source = "card+qr" if card_success and qr_success else "card"
+    else:
+        success = qr_success
+        match_source = "qr" if success else "none"
+
+    if value and not qr_success:
+        message = "QR khong trung MSSV."
+    elif reference_fingerprints and not card_success:
+        message = "The sinh vien khong trung anh da luu trong data."
+    elif success:
+        message = "Doi chieu the thanh cong."
+    else:
+        message = "Chua co anh the tham chieu hoac QR khong hop le."
+
     return {
         "success": success,
         "studentId": expected,
         "qrValue": value,
-        "message": "QR trung khop." if success else "QR khong trung MSSV.",
+        "qrStudentId": qr_student_id,
+        "cardDetected": bool(scan.get("cardDetected")),
+        "cardScore": scan.get("cardScore", 0.0),
+        "cardSimilarity": round(card_similarity, 4),
+        "hasCardReference": bool(reference_fingerprints),
+        "matchSource": match_source,
+        "message": message,
     }
 
 
@@ -389,6 +621,11 @@ def register_user(data: RegisterData) -> dict:
         decode_image(value) if value else None
         for value in (data.face_front_b64, data.face_left_b64, data.face_right_b64)
     ]
+    front_card_value = data.card_front_b64 or data.frontCard
+    back_card_value = data.card_back_b64 or data.backCard
+    front_card = decode_image(front_card_value) if front_card_value else None
+    back_card = decode_image(back_card_value) if back_card_value else None
+
     if images[0] is None:
         camera_status = camera_manager.status()
         camera_captures = camera_manager.face_captures()
@@ -478,6 +715,7 @@ def register_user(data: RegisterData) -> dict:
                 """,
                 (student_id, *processed_blobs),
             )
+            save_card_images(conn, student_id, front_card, back_card)
             conn.commit()
         except sqlite3.Error as exc:
             conn.rollback()

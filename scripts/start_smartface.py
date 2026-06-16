@@ -1,4 +1,5 @@
 import hashlib
+import importlib
 import json
 import os
 import shutil
@@ -16,6 +17,17 @@ FRONTEND_DIR = ROOT / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist-app" / "index.html"
 REQUIREMENTS = ROOT / "database_pdt" / "requirements.txt"
 URL = "http://127.0.0.1:8000"
+REQUIRED_MODULES = (
+    "cv2",
+    "fastapi",
+    "mediapipe",
+    "numpy",
+    "PIL",
+    "pydantic",
+    "pyzbar",
+    "requests",
+    "uvicorn",
+)
 
 
 def file_hash(paths: list[Path]) -> str:
@@ -54,6 +66,17 @@ def ensure_python_dependencies(state: dict) -> None:
     if state.get("requirements") == requirements_hash:
         return
 
+    try:
+        for module in REQUIRED_MODULES:
+            importlib.import_module(module)
+    except ImportError as exc:
+        print(f"Thieu thu vien Python: {exc.name}")
+    else:
+        print("Thu vien Python da san sang.")
+        state["requirements"] = requirements_hash
+        write_state(state)
+        return
+
     print("Dang cap nhat thu vien Python...")
     run(
         [
@@ -76,9 +99,28 @@ def npm_command() -> str:
     npm = shutil.which("npm.cmd")
     if npm:
         return npm
-    fallback = Path(r"D:\cuasu\npm.cmd")
-    if fallback.is_file():
-        return str(fallback)
+
+    local_node_dir = ROOT / ".node"
+    for candidate in sorted(local_node_dir.glob("node-v*-win-x64/npm.cmd")):
+        if candidate.is_file():
+            os.environ["PATH"] = (
+                f"{candidate.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+            )
+            return str(candidate)
+
+    common_locations = (
+        Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        / "nodejs"
+        / "npm.cmd",
+        Path(os.environ.get("LOCALAPPDATA", "")) / "Programs" / "nodejs" / "npm.cmd",
+    )
+    for candidate in common_locations:
+        if candidate.is_file():
+            os.environ["PATH"] = (
+                f"{candidate.parent}{os.pathsep}{os.environ.get('PATH', '')}"
+            )
+            return str(candidate)
+
     raise RuntimeError("Khong tim thay npm.cmd. Hay cai Node.js.")
 
 
@@ -86,10 +128,11 @@ def frontend_files() -> list[Path]:
     files = [
         FRONTEND_DIR / "package.json",
         FRONTEND_DIR / "package-lock.json",
-        FRONTEND_DIR / "vite.config.js",
         FRONTEND_DIR / "index.html",
     ]
     files.extend((FRONTEND_DIR / "src").rglob("*"))
+    files.extend((FRONTEND_DIR / "public").rglob("*"))
+    files.extend((FRONTEND_DIR / "scripts").rglob("*"))
     return [path for path in files if path.is_file()]
 
 
@@ -185,5 +228,9 @@ if __name__ == "__main__":
     except (OSError, RuntimeError, subprocess.CalledProcessError) as exc:
         print()
         print(f"KHONG THE KHOI DONG SMARTFACE: {exc}")
-        input("Nhan Enter de thoat...")
+        if sys.stdin.isatty():
+            try:
+                input("Nhan Enter de thoat...")
+            except EOFError:
+                pass
         raise SystemExit(1)

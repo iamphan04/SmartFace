@@ -14,6 +14,110 @@ def connect() -> sqlite3.Connection:
     return conn
 
 
+def sql_name(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def table_columns(conn: sqlite3.Connection, table: str) -> set[str]:
+    rows = conn.execute(f"PRAGMA table_info({sql_name(table)})").fetchall()
+    return {row["name"] for row in rows}
+
+
+def unique_legacy_table(conn: sqlite3.Connection, base_name: str) -> str:
+    existing = {
+        row["name"]
+        for row in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+        ).fetchall()
+    }
+    if base_name not in existing:
+        return base_name
+    index = 1
+    while f"{base_name}_{index}" in existing:
+        index += 1
+    return f"{base_name}_{index}"
+
+
+def create_face_images_table(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS face_images (
+            student_id TEXT PRIMARY KEY,
+            front_image BLOB NOT NULL,
+            left_image BLOB NOT NULL,
+            right_image BLOB NOT NULL,
+            source TEXT NOT NULL DEFAULT 'camera',
+            updated_at TEXT DEFAULT (datetime('now', 'localtime')),
+            created_at TEXT DEFAULT (datetime('now', 'localtime')),
+            FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+        )
+        """
+    )
+
+
+def ensure_face_images_schema(conn: sqlite3.Connection) -> None:
+    columns = table_columns(conn, "face_images")
+    required = {"student_id", "front_image", "left_image", "right_image"}
+    if not columns or required.issubset(columns):
+        return
+
+    legacy_table = unique_legacy_table(conn, "face_images_legacy")
+    conn.execute(
+        f"ALTER TABLE {sql_name('face_images')} RENAME TO {sql_name(legacy_table)}"
+    )
+    create_face_images_table(conn)
+
+    if {"person_id", "face_data"}.issubset(columns):
+        legacy = sql_name(legacy_table)
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO profiles(student_id, full_name)
+            SELECT UPPER(TRIM(person_id)), UPPER(TRIM(person_id))
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO face_images(
+                student_id, front_image, left_image, right_image,
+                source, updated_at, created_at
+            )
+            SELECT
+                UPPER(TRIM(person_id)),
+                face_data,
+                COALESCE(face_data_left, face_data),
+                COALESCE(face_data_right, face_data),
+                'legacy',
+                COALESCE(updated_at, datetime('now', 'localtime')),
+                COALESCE(created_at, datetime('now', 'localtime'))
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+              AND face_data IS NOT NULL
+            """
+        )
+        conn.execute(
+            f"""
+            INSERT OR IGNORE INTO processed_faces(
+                student_id, front_processed, left_processed, right_processed,
+                processing_status
+            )
+            SELECT
+                UPPER(TRIM(person_id)),
+                face_data,
+                COALESCE(face_data_left, face_data),
+                COALESCE(face_data_right, face_data),
+                'legacy'
+            FROM {legacy}
+            WHERE person_id IS NOT NULL
+              AND TRIM(person_id) != ''
+              AND face_data IS NOT NULL
+            """
+        )
+
+
 def init_database() -> None:
     with connect() as conn:
         conn.executescript(
@@ -51,6 +155,7 @@ def init_database() -> None:
             );
             """
         )
+        ensure_face_images_schema(conn)
 
 
 def add_person(person_id: str, name: str) -> bool:

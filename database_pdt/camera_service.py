@@ -196,6 +196,15 @@ class CameraManager:
                 return getattr(self.processor, "value", "")
         return ""
 
+    def qr_scan(self) -> dict:
+        with self.lock:
+            if self.mode != "qr":
+                return {}
+            scan_result = getattr(self.processor, "scan_result", None)
+            if callable(scan_result):
+                return scan_result()
+            return {"value": getattr(self.processor, "value", "")}
+
     def jpeg_frame(self) -> Optional[bytes]:
         with self.lock:
             return self.latest_jpeg
