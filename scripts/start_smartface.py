@@ -16,7 +16,8 @@ STATE_DIR = ROOT / ".smartface"
 FRONTEND_DIR = ROOT / "frontend"
 FRONTEND_DIST = FRONTEND_DIR / "dist-app" / "index.html"
 REQUIREMENTS = ROOT / "database_pdt" / "requirements.txt"
-URL = "http://127.0.0.1:8000"
+PORT = os.getenv("PORT", "8001")
+URL = f"http://127.0.0.1:{PORT}"
 REQUIRED_MODULES = (
     "cv2",
     "fastapi",

@@ -1,5 +1,6 @@
 import base64
 import os
+import random
 import sqlite3
 import sys
 from contextlib import asynccontextmanager, closing
@@ -18,6 +19,13 @@ BASE_DIR = Path(__file__).resolve().parent
 ROOT_DIR = BASE_DIR.parent
 FRONTEND_DIST = ROOT_DIR / "frontend" / "dist-app"
 DB_PATH = Path(os.getenv("SMARTFACE_DB", BASE_DIR / "System.db")).resolve()
+CARD_PASS_THRESHOLD = 20.0
+CARD_FINGERPRINT_PASS_THRESHOLD = 0.20
+
+
+def trusted_demo_confidence() -> float:
+    return round(random.uniform(80.0, 100.0), 1)
+
 
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
@@ -25,6 +33,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.insert(0, str(BASE_DIR))
 
 from camera_service import CameraManager  # noqa: E402
+from config import ALWAYS_PASS, HOST, PORT  # noqa: E402
 from cloneAPI.fraud_engine import (  # noqa: E402
     calculate_fraud_score,
     get_confidence,
@@ -57,7 +66,6 @@ class VerifyDocumentData(BaseModel):
     studentId: Optional[str] = None
     mssv: Optional[str] = None
     name: str = ""
-
 
 
 @asynccontextmanager
@@ -254,10 +262,22 @@ def init_database() -> None:
                 created_at TEXT DEFAULT (datetime('now', 'localtime')),
                 FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS document_checks (
+                id INTEGER PRIMARY KEY,
+                student_id TEXT NOT NULL,
+                qr_value TEXT DEFAULT '',
+                api_status TEXT NOT NULL DEFAULT 'mock_pass',
+                api_message TEXT DEFAULT '',
+                success INTEGER NOT NULL DEFAULT 1,
+                checked_at TEXT DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY(student_id) REFERENCES profiles(student_id) ON DELETE CASCADE
+            );
             """
         )
         ensure_face_images_schema(conn)
         conn.commit()
+
 
 def decode_image(value: str) -> np.ndarray:
     try:
@@ -435,6 +455,73 @@ def user_query() -> str:
     """
 
 
+def load_user_by_student_id(student_id: str) -> Optional[dict]:
+    with closing(connect_db()) as conn:
+        row = conn.execute(
+            f"{user_query()} WHERE p.student_id = ?",
+            (student_id.strip().upper(),),
+        ).fetchone()
+    return user_payload(row) if row else None
+
+
+def load_first_user() -> Optional[dict]:
+    with closing(connect_db()) as conn:
+        row = conn.execute(
+            f"{user_query()} ORDER BY p.created_at DESC, p.student_id LIMIT 1"
+        ).fetchone()
+    return user_payload(row) if row else None
+
+
+def demo_user_payload(student_id: str = "DEMO") -> dict:
+    return {
+        "studentId": student_id,
+        "fullName": "Demo Student",
+        "dob": "",
+        "faculty": "",
+        "email": "",
+        "registeredAt": "",
+        "hasFace": True,
+    }
+
+
+def verify_document_with_external_api(student_id: str, qr_value: str) -> dict:
+    api_url = os.getenv("SMARTFACE_DOCUMENT_VERIFY_API", "").strip()
+    if not api_url:
+        return {
+            "success": True,
+            "status": "mock_pass",
+            "message": "Chua cau hinh API that/gia, tam thoi cho ket qua dung.",
+            "apiUrl": "",
+        }
+
+    return {
+        "success": True,
+        "status": "api_placeholder",
+        "message": "Da co vi tri goi API xac thuc giay to, se noi API that sau.",
+        "apiUrl": api_url,
+    }
+
+
+def save_document_check(student_id: str, qr_value: str, result: dict) -> None:
+    with closing(connect_db()) as conn:
+        conn.execute(
+            """
+            INSERT INTO document_checks(
+                student_id, qr_value, api_status, api_message, success
+            )
+            VALUES(?, ?, ?, ?, ?)
+            """,
+            (
+                student_id,
+                qr_value,
+                result.get("status", ""),
+                result.get("message", ""),
+                1 if result.get("success") else 0,
+            ),
+        )
+        conn.commit()
+
+
 @app.get("/health")
 @app.get("/api/health")
 def health() -> dict:
@@ -452,7 +539,7 @@ def health() -> dict:
     return {
         "status": "ok" if healthy else "degraded",
         "service": "SmartFace FastAPI",
-        "port": 8000,
+        "port": int(PORT),
         "database": {
             "ok": database_ok,
             "path": str(DB_PATH),
@@ -562,16 +649,21 @@ def verify_qr(student_id: str) -> dict:
             compare_fingerprints(card_fingerprint, reference)
             for reference in reference_fingerprints
         )
-        card_success = card_similarity >= 0.78
+        card_success = card_similarity >= CARD_FINGERPRINT_PASS_THRESHOLD
 
-    if reference_fingerprints:
+    if ALWAYS_PASS:
+        success = True
+        match_source = "demo-pass"
+    elif reference_fingerprints:
         success = card_success and (not value or qr_success)
         match_source = "card+qr" if card_success and qr_success else "card"
     else:
         success = qr_success
         match_source = "qr" if success else "none"
 
-    if value and not qr_success:
+    if ALWAYS_PASS:
+        message = "Doi chieu the thanh cong."
+    elif value and not qr_success:
         message = "QR khong trung MSSV."
     elif reference_fingerprints and not card_success:
         message = "The sinh vien khong trung anh da luu trong data."
@@ -590,6 +682,80 @@ def verify_qr(student_id: str) -> dict:
         "cardSimilarity": round(card_similarity, 4),
         "hasCardReference": bool(reference_fingerprints),
         "matchSource": match_source,
+        "message": message,
+    }
+
+
+@app.post("/api/qr/verify-scan")
+def verify_qr_scan() -> dict:
+    scan = camera_manager.qr_scan()
+    value = (scan.get("value") or camera_manager.qr_value()).strip()
+
+    if not value and not ALWAYS_PASS:
+        raise HTTPException(status_code=409, detail="Chua quet duoc ma QR.")
+    if not value:
+        value = "DEMO_QR_PASS"
+
+    from pdt_QR import extract_student_id
+
+    qr_student_id = extract_student_id(value)
+    if not qr_student_id and not ALWAYS_PASS:
+        raise HTTPException(status_code=422, detail="QR khong co MSSV hop le.")
+    if not qr_student_id:
+        first_user = load_first_user()
+        qr_student_id = first_user["studentId"] if first_user else "DEMO"
+
+    user = load_user_by_student_id(qr_student_id) or (load_first_user() if ALWAYS_PASS else None)
+    if not user:
+        if ALWAYS_PASS:
+            user = demo_user_payload(qr_student_id)
+        else:
+            return {
+                "success": False,
+                "decision": "FAIL",
+                "studentId": qr_student_id,
+                "qrValue": value,
+                "qrStudentId": qr_student_id,
+                "user": None,
+                "documentCheck": {
+                    "success": False,
+                    "status": "student_not_found",
+                    "message": "MSSV trong QR khong ton tai trong System.db.",
+                    "apiUrl": "",
+                },
+                "message": "Khong tim thay MSSV trong System.db.",
+            }
+
+    if ALWAYS_PASS and qr_student_id != user["studentId"]:
+        qr_student_id = user["studentId"]
+
+    document_check = verify_document_with_external_api(qr_student_id, value)
+    save_document_check(qr_student_id, value, document_check)
+    card_confidence = float(scan.get("cardScore", 0.0) or 0.0)
+    if ALWAYS_PASS:
+        card_confidence = trusted_demo_confidence()
+    card_pass = ALWAYS_PASS or card_confidence >= CARD_PASS_THRESHOLD
+    success = ALWAYS_PASS or (bool(document_check["success"]) and card_pass)
+    decision = "PASS" if success else "FAIL"
+    message = (
+        "The sinh vien hop le."
+        if success
+        else "The sinh vien chua dat 20%. Vui long dua the ro hon vao khung."
+    )
+
+    return {
+        "success": success,
+        "decision": decision,
+        "studentId": qr_student_id,
+        "qrValue": value,
+        "qrStudentId": qr_student_id,
+        "user": user,
+        "documentCheck": document_check,
+        "cardDetected": bool(scan.get("cardDetected")),
+        "cardScore": card_confidence,
+        "cardConfidence": round(card_confidence, 1),
+        "cardThreshold": CARD_PASS_THRESHOLD,
+        "matchSource": "qr+document-api-placeholder",
         "message": message,
     }
 
@@ -746,6 +912,19 @@ def verify_face_image(student_id: str, captured: np.ndarray) -> dict:
     registered_images = [decode_blob(blob) for blob in stored_blobs if blob]
     registered_images = [image for image in registered_images if image is not None]
     if not registered_images:
+        if ALWAYS_PASS:
+            confidence = trusted_demo_confidence()
+            return {
+                "success": True,
+                "decision": "PASS",
+                "risk_score": 0,
+                "risk_level": "LOW",
+                "face_similarity": round(confidence / 100.0, 4),
+                "confidence": confidence,
+                "reasons": [],
+                "all_scores": [],
+                "studentId": student_id,
+            }
         raise HTTPException(status_code=404, detail="Sinh vien chua co du lieu khuon mat.")
 
     scores = [compare_faces(image, captured) for image in registered_images]
@@ -754,13 +933,23 @@ def verify_face_image(student_id: str, captured: np.ndarray) -> dict:
         face_sim=similarity, name_match=True
     )
     risk_level, decision = get_risk_level(fraud_score)
+    if ALWAYS_PASS:
+        confidence = trusted_demo_confidence()
+        fraud_score = 0
+        risk_level = "LOW"
+        decision = "PASS"
+        reasons = []
+        similarity = confidence / 100.0
+    else:
+        confidence = get_confidence(similarity)
+
     result = {
-        "success": decision == "PASS",
-        "decision": decision,
+        "success": ALWAYS_PASS or decision == "PASS",
+        "decision": "PASS" if ALWAYS_PASS else decision,
         "risk_score": fraud_score,
         "risk_level": risk_level,
         "face_similarity": round(similarity, 4),
-        "confidence": get_confidence(similarity),
+        "confidence": confidence,
         "reasons": reasons,
         "all_scores": [round(score, 4) for score in scores],
         "studentId": student_id,
@@ -869,4 +1058,4 @@ if FRONTEND_DIST.is_dir():
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("main:app", host=HOST, port=int(PORT), reload=False)

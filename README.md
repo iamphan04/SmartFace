@@ -25,7 +25,7 @@ npm run build
 npm start
 ```
 
-Open `http://localhost:8000`.
+Open `http://localhost:8001` by default.
 
 ## Development
 
@@ -41,9 +41,22 @@ Run Vite in a second terminal:
 npm run dev:frontend
 ```
 
-Vite proxies `/api` to `http://127.0.0.1:8000`.
+Vite proxies `/api` to `http://127.0.0.1:${PORT}` with default `8001`.
 
-API documentation is available at `http://localhost:8000/docs`.
+API documentation is available at `http://localhost:8001/docs` by default.
+
+## Deploy
+
+SmartFace is ready for proxy-based platforms such as Railway:
+
+- The backend listens on `HOST=0.0.0.0`.
+- The backend reads the internal port from `$PORT`.
+- If `$PORT` is not provided, local default is `8001`.
+- Railway can use `railway.json` or `Procfile` to run:
+
+```bash
+python database_pdt/main.py
+```
 
 ## Camera API
 

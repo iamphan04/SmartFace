@@ -1,8 +1,8 @@
 {
   "scripts": {
     "dev:frontend": "npm --prefix frontend run dev",
-    "dev:backend": ".venv-smartface312\\Scripts\\python.exe database_pdt\\main.py",
+    "dev:backend": "python database_pdt/main.py",
     "build": "npm --prefix frontend run build",
-    "start": ".venv-smartface312\\Scripts\\python.exe database_pdt\\main.py"
+    "start": "python database_pdt/main.py"
   }
 }

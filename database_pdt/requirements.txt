@@ -7,3 +7,4 @@ mediapipe>=0.10.35,<1
 pyzbar>=0.1.9,<1
 Pillow>=12.2,<13
 requests>=2.32,<3
+python-dotenv>=1.2,<2
